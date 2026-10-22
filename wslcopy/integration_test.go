@@ -42,6 +42,10 @@ func newWindowsFixture(t *testing.T, env windowsEnvironment) *windowsFixture {
 	f.root = root
 	must(t, os.Mkdir(f.root, 0700))
 	t.Cleanup(func() {
+		if err := waitRetirements(f.root); err != nil {
+			t.Error(err)
+			return // Keep the fixture if its detached child may still be using it.
+		}
 		// t.Context() is already canceled; cleanup needs an independent context.
 		// Delete exact test-created junctions nonrecursively before removing this owned fixture.
 		for _, junction := range slices.Backward(f.junctions) {
@@ -111,6 +115,7 @@ func TestWindows(t *testing.T) {
 	env.tarVersion = string(output)
 
 	t.Run("replacement", func(t *testing.T) { testWindowsReplacement(t, env) })
+	t.Run("background-lifetime", func(t *testing.T) { testWindowsRetirementLifetime(t, env) })
 	t.Run("content", func(t *testing.T) {
 		f := newWindowsFixture(t, env)
 		writeFile(t, filepath.Join(f.source, "binary"), "\x00\xffpayload\r\n")

@@ -12,7 +12,7 @@ import (
 )
 
 func TestReplace(t *testing.T) {
-	for _, mode := range []string{"absent", "replace-twice", "empty", "dry-run", "invalid-source", "pack-failure", "extract-failure", "cleanup-failure", "preserve-collision"} {
+	for _, mode := range []string{"absent", "replace-twice", "empty", "dry-run", "invalid-source", "pack-failure", "extract-failure", "cleanup-failure", "cleanup-start-failure", "preserve-collision"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newLocalFixture(t)
 			if mode != "absent" {
@@ -39,6 +39,8 @@ exit 23
 				t.Setenv("TEST_EXTRACT_FAIL", "1")
 			case "cleanup-failure":
 				t.Setenv("TEST_CLEANUP_FAIL", "1")
+			case "cleanup-start-failure":
+				t.Setenv("TEST_CLEANUP_START_FAIL", "1")
 			case "preserve-collision":
 				writeScript(t, filepath.Join(f.bin, "tar.exe"), `
 for container in "$TEST_PARENT"/.wsl-copy-*; do
@@ -51,6 +53,7 @@ exit 23
 `)
 			}
 			output, err := Copy(t.Context(), opts)
+			must(t, waitRetirements(f.parent))
 			containers, globErr := filepath.Glob(filepath.Join(f.parent, ".wsl-copy-*"))
 			must(t, globErr)
 			switch mode {
@@ -93,9 +96,16 @@ exit 23
 				if !output.DestinationCreated || output.DestinationRestored {
 					t.Fatalf("incorrect replacement result: %+v", output)
 				}
-				if mode == "cleanup-failure" {
-					if len(containers) != 1 || output.PreviousWindowsPath == "" || !strings.Contains(output.CleanupError, "simulated cleanup failure") {
-						t.Fatalf("cleanup failure lost: %+v", output)
+				if mode == "cleanup-failure" || mode == "cleanup-start-failure" {
+					if len(containers) != 1 {
+						t.Fatalf("failed retirement did not retain its container: %+v", output)
+					}
+					if mode == "cleanup-start-failure" {
+						if output.PreviousWindowsPath == "" || output.CleanupError == "" {
+							t.Fatalf("launch failure lost: %+v", output)
+						}
+					} else if output.PreviousWindowsPath != "" || output.CleanupError != "" || !strings.Contains(readFile(t, filepath.Join(containers[0], "cleanup.log")), "failed: simulated cleanup failure") {
+						t.Fatalf("asynchronous failure leaked into the completed copy result: %+v", output)
 					}
 					if readFile(t, filepath.Join(containers[0], "previous", "old-only")) != "keep previous" {
 						t.Fatal("cleanup failure lost old data")

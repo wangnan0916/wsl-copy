@@ -59,10 +59,10 @@ func (r commandRunner) replaceAndCopy(source, local string, target windowsPath, 
 		return err
 	}
 
-	// Copy has committed. Cleanup errors must not undo a usable new target or
-	// restore an old tree that may already have been partly deleted.
-	if err := r.removePrevious(container, nativeContainer, containerInfo, previous, powershell); err != nil {
-		output.CleanupError = fmt.Sprintf("retire %s: %v", nativeContainer, err)
+	// Copy has committed. Launch one detached retirement process without waiting
+	// for its tree checks/deletion. A launch failure cannot undo usable new output.
+	if err := startRetirement(container, nativeContainer, containerInfo, previous, powershell); err != nil {
+		output.CleanupError = fmt.Sprintf("start background retirement for %s: %v", nativeContainer, err)
 	} else {
 		output.PreviousWindowsPath = ""
 	}
@@ -89,7 +89,7 @@ func (r commandRunner) moveDirectory(from, to string, expected os.FileInfo) erro
 	return os.Rename(from, to)
 }
 
-func (r commandRunner) removePrevious(container, native string, owner, previous os.FileInfo, powershell string) error {
+func startRetirement(container, native string, owner, previous os.FileInfo, powershell string) error {
 	for path, expected := range map[string]os.FileInfo{container: owner, filepath.Join(container, "previous"): previous} {
 		current, err := os.Lstat(path)
 		if err != nil {
@@ -110,7 +110,20 @@ func (r commandRunner) removePrevious(container, native string, owner, previous 
 	if err != nil {
 		return err
 	}
+	logPath := filepath.Join(container, "cleanup.log")
+	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	_, writeErr := log.WriteString("queued\n")
+	if err := errors.Join(writeErr, log.Close()); err != nil {
+		return err
+	}
 	script := nativePaths(target) + safeTreeScript + removePreviousScript
-	_, err = r.run(nil, nil, powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script)
-	return err
+	if err := startRetirementProcess(powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script); err != nil {
+		// No child exists on Start failure; retain an operator diagnostic if possible.
+		_ = os.WriteFile(logPath, []byte("failed: "+err.Error()+"\n"), 0600)
+		return err
+	}
+	return nil
 }

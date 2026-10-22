@@ -24,7 +24,7 @@ func TestCLI(t *testing.T) {
 	if output, err := exec.CommandContext(t.Context(), binary, "--version").CombinedOutput(); err != nil || string(output) != "wsl-copy cli-test\n" {
 		t.Fatalf("linked version not reported: %v; %q", err, output)
 	}
-	for _, mode := range []string{"copy", "dry-run", "invalid-source", "prepare-failure", "extract-failure", "replace-failure", "replace-cleanup"} {
+	for _, mode := range []string{"copy", "dry-run", "invalid-source", "prepare-failure", "extract-failure", "replace", "replace-failure", "replace-cleanup", "replace-launch-failure"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newLocalFixture(t)
 			// Explicit fixture tools ensure ambient CLI environment cannot invoke Windows.
@@ -42,7 +42,7 @@ func TestCLI(t *testing.T) {
 				t.Setenv("TEST_NATIVE_ERROR", "1")
 			case "extract-failure":
 				t.Setenv("TEST_EXTRACT_FAIL", "1")
-			case "replace-failure", "replace-cleanup":
+			case "replace", "replace-failure", "replace-cleanup", "replace-launch-failure":
 				must(t, os.Mkdir(f.target, 0700))
 				writeFile(t, filepath.Join(f.target, "old-only"), "previous")
 				args = append(args, "--replace")
@@ -50,7 +50,11 @@ func TestCLI(t *testing.T) {
 					t.Setenv("TEST_EXTRACT_FAIL", "1")
 				} else {
 					status, wantCode = "copied", 0
-					t.Setenv("TEST_CLEANUP_FAIL", "1")
+					if mode == "replace-cleanup" {
+						t.Setenv("TEST_CLEANUP_FAIL", "1")
+					} else if mode == "replace-launch-failure" {
+						t.Setenv("TEST_CLEANUP_START_FAIL", "1")
+					}
 				}
 			}
 			cmd := exec.CommandContext(t.Context(), binary, args...)
@@ -90,12 +94,12 @@ func TestCLI(t *testing.T) {
 					t.Fatal("missing retention diagnostics:", stderr.String())
 				}
 			}
-			if mode == "replace-failure" || mode == "replace-cleanup" {
+			if mode == "replace-failure" || mode == "replace-launch-failure" {
 				field, suffix := "retained_windows_path", `\partial`
-				if mode == "replace-cleanup" {
+				if mode == "replace-launch-failure" {
 					field, suffix = "previous_windows_path", `\previous`
 					warning, ok := output["cleanup_error"].(string)
-					if !ok || !strings.Contains(warning, "simulated cleanup failure") {
+					if !ok || !strings.Contains(warning, "start background retirement") {
 						t.Fatal("cleanup warning missing:", output)
 					}
 					want["cleanup_error"] = warning

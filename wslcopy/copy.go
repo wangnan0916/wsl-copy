@@ -38,18 +38,20 @@ type Result struct {
 	// DestinationCreated is true only if this call created the destination.
 	// It remains true if packing or extraction subsequently fails.
 	DestinationCreated bool
-	// PreviousWindowsPath is the last-known location of retired data, if retained.
-	// Cleanup failure may leave this tree only partly present.
+	// PreviousWindowsPath is the last-known old-data location on copy/launch failure.
+	// It is cleared when a detached worker starts, not when deletion completes.
 	PreviousWindowsPath string
 	// RetainedWindowsPath locates failed new output, including after rollback.
 	RetainedWindowsPath string
 	DestinationRestored bool
-	// CleanupError is a warning after a successful copy, not a reason to roll back.
+	// CleanupError reports only failure to prepare/start retirement after a
+	// successful copy. Later failures stay in the retirement container's cleanup.log.
 	CleanupError string
 }
 
 // Copy copies a WSL directory to Windows, or validates it in dry-run mode.
-// Keep the source, destination parent and retired tree stable until Copy returns.
+// Keep the source and destination parent stable until Copy returns. Never modify
+// a retirement container after handing it to background cleanup.
 // Failed new output is never deleted. Replacement may restore the old directory
 // and move failed output to RetainedWindowsPath. Inspect Result even on error.
 func Copy(ctx context.Context, opts Options) (Result, error) {

@@ -45,7 +45,7 @@ func parseOptions(args []string, output io.Writer) (options, error) {
 	fs.StringVar(&configPath, "config", "", "JSON config path (default: user config directory/wsl-copy/config.json; empty disables)")
 	fs.StringVar(&opts.SourceRoot, "source-root", "", "WSL root for automatic source-relative target mapping")
 	fs.StringVar(&opts.WindowsRoot, "windows-root", "", "existing Windows root for automatic target mapping")
-	fs.BoolVar(&opts.Replace, "replace", false, "rename an existing directory, copy, then retire the old directory")
+	fs.BoolVar(&opts.Replace, "replace", false, "rename an existing directory, copy, then retire the old directory in the background")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "validate without creating, renaming or deleting directories or running tar")
 	fs.BoolVar(&opts.showVersion, "version", false, "print the version")
 	fs.StringVar(&opts.WindowsTar, "windows-tar", os.Getenv("WSL_COPY_WINDOWS_TAR"), "WSL executable path (default: WSL_COPY_WINDOWS_TAR or tar.exe on PATH)")
@@ -133,7 +133,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "Previous data last known at:", copied.PreviousWindowsPath)
 	}
 	if copied.CleanupError != "" {
-		fmt.Fprintln(stderr, "Copy completed; previous-directory cleanup failed:", copied.CleanupError)
+		fmt.Fprintln(stderr, "Copy completed; background retirement could not start:", copied.CleanupError)
 	}
 	output.ElapsedSeconds = math.Round(time.Since(start).Seconds()*1000) / 1000
 	encoder := json.NewEncoder(stdout)

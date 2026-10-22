@@ -4,7 +4,7 @@
 
 `wsl-copy` is a standalone Linux CLI and reusable Go library for copying folders from Windows Subsystem for Linux (WSL2) to Windows. Transfers use one uncompressed GNU tar archive and one Windows tar extraction process.
 
-Use it to copy build artifacts, front-end bundles or WeChat mini-program output from the WSL filesystem to Windows tools. The source stays unchanged. Existing destinations are refused by default; explicit replacement renames the old directory, copies into the original path, and retires the old data after success. It does not merge files, build projects, watch for changes or control Windows applications.
+Use it to copy build artifacts, front-end bundles or WeChat mini-program output from the WSL filesystem to Windows tools. The source stays unchanged. Existing destinations are refused by default; explicit replacement renames the old directory, copies into the original path, and schedules background retirement after success. It returns when the new copy is ready, without waiting for old-tree checks or deletion. It does not merge files, build projects, watch for changes or control Windows applications.
 
 [Quick start](#quick-start-copy-a-wsl-folder-to-windows) · [Go library](#go-library-api-and-project-layout) · [Safety](#copying-and-replacement-safety) · [Benchmarks](#performance-benchmarks) · [FAQ](#faq)
 
@@ -130,7 +130,7 @@ result, err := wslcopy.Copy(ctx, wslcopy.Options{
 
 `Options.SourceRoot` / `Options.WindowsRoot` enable mapping when `WindowsTarget` is empty; `Options.Replace` opts into replacement. `Options.DryRun` validates without mutation or tar execution. The library does not load configuration files.
 
-Inspect `Result` on both success and failure. `DestinationCreated` is historical ownership: it stays true even when failed new output is moved aside and the previous directory is restored. `RetainedWindowsPath` locates that failed output; `DestinationRestored` reports successful rollback. `PreviousWindowsPath` is the last-known location of retained old data. On successful copying, `CleanupError` may report failed retirement; the old tree can then be partly deleted and must not be restored automatically. Empty recovery fields are omitted by the CLI.
+Inspect `Result` on both success and failure. `DestinationCreated` is historical ownership: it stays true even when failed new output is moved aside and the previous directory is restored. `RetainedWindowsPath` locates that failed output; `DestinationRestored` reports successful rollback. `PreviousWindowsPath` is the last-known old-data location on copy or retirement-launch failure. A successful launch clears that field; it does **not** mean deletion has completed. `CleanupError` reports only failure to prepare/start retirement, without rolling back the completed copy. Later worker failures stay in its `cleanup.log`, not in the already-returned result. Empty recovery fields are omitted by the CLI.
 
 `Options.WindowsTar` and `Options.PowerShell` accept WSL executable paths; empty values use `PATH`. Only the CLI reads the `WSL_COPY_*` environment defaults. The library accepts the caller's context, installs no signal handlers, and does not write JSON, select exit codes or use process stdout/stderr directly. Set `Options.Diagnostics` to an `io.Writer` to receive command logs and subprocess diagnostics; nil discards them.
 
@@ -146,7 +146,11 @@ Inspect `Result` on both success and failure. `DestinationCreated` is historical
 │   ├── copy.go, copy_test.go       # Public API and copy orchestration
 │   ├── paths.go, paths_test.go     # Path, filename and source-tree validation
 │   ├── mapping.go, mapping_test.go # Source-relative destination mapping
-│   ├── replace.go, replace_test.go # Retirement, rollback and cleanup
+│   ├── replace.go, replace_test.go # Retirement ownership, launch and rollback
+│   ├── background_linux.go        # Detached child lifetime and process reaping
+│   ├── background_other.go        # Non-Linux build compatibility
+│   ├── background_test.go         # Nonblocking retirement and cancellation isolation
+│   ├── background_integration_test.go # Native worker survival after CLI exit
 │   ├── command.go, command_test.go # Subprocesses, Windows checks and archive transfer
 │   ├── fixtures_test.go           # Shared test fixtures and assertions
 │   ├── cli_test.go                # Compiled CLI/library boundary tests
@@ -164,16 +168,18 @@ The PowerShell scripts are embedded at build time, not loaded from the working d
 
 ## Copying and replacement safety
 
-- Read-only Windows checks reject reparse points/devices before path conversion. Existing destinations are refused unless replacement is enabled; replacement checks the entire old tree before mutation. The converted parent is mapped back to Windows for validation. An exclusive `mkdir` prevents entering a destination created by another caller.
+- Read-only Windows checks reject reparse points/devices before path conversion. Existing destinations are refused unless replacement is enabled. Replacement validates the root and its ancestors, but does not scan old descendants on the copy's critical path. A nested old-tree junction can therefore be retired by rename, but its background deletion is refused. The converted parent is mapped back to Windows for validation. An exclusive `mkdir` prevents entering a destination created by another caller.
 - The source is checked once for regular files/directories and case-insensitive collisions using Unicode simple folding. Source names and destination components use conservative Windows filename validation on every host OS: invalid UTF-8, control characters, reserved device names (including `CONIN$` and `CONOUT$`), and trailing dots/spaces are rejected. This does not normalize filenames or prove extraction compatibility.
 - GNU tar creates one uncompressed POSIX archive in WSL temporary storage. `TAR_OPTIONS` is removed from the packing environment. The archive must be outside the source; set `TMPDIR` to another writable directory if necessary.
 - Archive bytes go directly through binary stdin to Windows tar, not through a PowerShell text pipeline. Hidden files and empty directories are included. Hard links become independent content. `-m` prevents restoration of source modification times; Linux ownership, permissions, ACLs and executable bits are not guaranteed.
 - The temporary archive is removed on normal exit or error. Failed new output is **never deleted**. Without a previous directory it stays at the target. During replacement, an ordinary copy failure moves new output aside and attempts to restore the previous directory without overwriting another entry. A failed rollback retains both trees for recovery.
-- Replacement reserves a unique sibling `.wsl-copy-<id>` directory and renames the old target into its `previous` child **before packing/copying**. After successful extraction, native checks revalidate that owned retired tree, then delete entries bottom-up without following reparse points or using recursive directory deletion. Cleanup runs in the foreground; failure becomes a warning, not a rollback of the completed copy. Only this invocation's retired tree can be removed; failed `partial` output is retained.
-- Cancellation conservatively retains the old and new trees in their last-known locations, rather than restoring old data into a path that a Windows writer may still be using. There is no automatic crash recovery or retry. Inspect reported recovery paths before a later replacement attempt.
-- Finish builds and writes first. Keep the source, destination parent and retired tree stable until return. Copying is not an atomic publication; consumers must wait for completion. These checks do not defend against concurrent junction swaps, overlapping parent/child copies or external writes. Newly created mapping parents can remain after a failure.
+- Replacement reserves a unique sibling `.wsl-copy-<id>` directory and renames the old target into its `previous` child **before packing/copying**. After successful extraction, one detached native PowerShell process revalidates the entire owned retired tree, then deletes entries bottom-up without following reparse points or using recursive directory deletion. **Copy/CLI return after launching it, without waiting for checks or deletion.** The worker has independent lifetime, null stdio and no dependency on the caller's context, terminal or output pipes; it continues after normal CLI exit. Only this invocation's retired tree can be removed; failed `partial` output is retained. No queue, persistent service or automatic retry is involved.
+- Cancellation during copying conservatively retains the old and new trees in their last-known locations, rather than restoring old data into a path that a Windows writer may still be using. There is no automatic crash recovery or retry. Inspect reported recovery paths before a later replacement attempt.
+- Finish builds and writes first. Keep the source and destination parent stable until return. After handoff, never modify, adopt or reuse a retirement container or replace its ancestors; these are discarded paths, not current build outputs. Copying is not an atomic publication; consumers wait for `copied`, then use `windows_path` immediately without polling retirement. These checks do not defend against concurrent junction swaps, overlapping parent/child copies or external writes. Newly created mapping parents can remain after a failure.
 
-There are no content hashes, manifests, source rechecks, automatic retries, cleanup workers, attribute/ACL changes or application-control operations in the copy operation.
+A successful worker deletes its container and `cleanup.log`. On failure it retains the remaining old data and a best-effort error log at `.wsl-copy-<id>/cleanup.log`; the old tree may be partly deleted and must not be restored automatically. Failed startup, forced termination or WSL shutdown may leave a queued/running log or no final diagnostic. This is operator evidence for troubleshooting, not a completion API; normal callers must not wait or poll it.
+
+There are no content hashes, manifests, source rechecks, automatic retries, persistent cleanup services, attribute/ACL changes or application-control operations in the copy operation.
 
 ## CLI JSON output and exit codes
 
@@ -186,9 +192,9 @@ During normal execution, the CLI writes one JSON object to stdout; diagnostics a
 | 1 | `failed` | A runtime failure. |
 | 2 | — | Invalid CLI arguments; diagnostic text instead of JSON. |
 
-The result contains `status` and `elapsed_seconds`, plus `source_path` and `windows_path` once validated. Failures include `error`; `destination_retained: true` appears when this invocation created new output and then failed. After rollback, `retained_windows_path` identifies that output and `destination_restored: true` means the previous directory is back at `windows_path`. `previous_windows_path` reports the last-known old-data location if not restored or completely retired.
+The result contains `status` and `elapsed_seconds`, plus `source_path` and `windows_path` once validated. Failures include `error`; `destination_retained: true` appears when this invocation created new output and then failed. After rollback, `retained_windows_path` identifies that output and `destination_restored: true` means the previous directory is back at `windows_path`. `previous_windows_path` reports the last-known old-data location on copy or retirement-launch failure; normal background handoff omits it.
 
-A `cleanup_error` warning accompanies `status: "copied"` and exit 0: the new target is usable, but old data may remain (possibly partly deleted). Never roll back from that warning. Existing create-only calls retain their original JSON field set.
+If retirement cannot be prepared/started, `cleanup_error` accompanies `status: "copied"` and exit 0: the new target is usable and old data is retained. Never roll back from that warning. Once the worker is launched, later cleanup failures cannot change stdout, stderr, the exit code or the returned `Result`; they are recorded in its private log when possible. Successful handoff and create-only calls both keep the normal copy JSON field set.
 
 `copied` means successful packing and extraction, **not content or filename round-trip verification** and not a guarantee that old-tree retirement succeeded. `--help` and `--version` print text instead of JSON. Forced termination can leave a partial destination and may not produce JSON; there is no crash recovery.
 
@@ -222,7 +228,7 @@ These are illustrative results, not speed guarantees. Caches were not flushed, s
 
 ### Does wsl-copy synchronize files or overwrite an existing Windows folder?
 
-There is no background synchronization or file merging. By default, every existing destination is refused. `--replace` (or `replace: true` in configuration) explicitly enables full directory replacement: rename old, copy new, then retire old. Windows-only files do not carry over.
+There is no background synchronization or file merging. By default, every existing destination is refused. `--replace` (or `replace: true` in configuration) explicitly enables full directory replacement: rename old, copy new, then retire old in the background. Windows-only files do not carry over.
 
 ### Can I copy a single file or copy from Windows to WSL?
 

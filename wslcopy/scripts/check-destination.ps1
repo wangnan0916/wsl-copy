@@ -21,7 +21,11 @@ catch [IO.FileNotFoundException] {}
 catch [IO.DirectoryNotFoundException] {}
 if ($null -ne $attributes) {
     if (-not $replace) { throw "Destination already exists: $p" }
-    $null = Get-SafeTree $p
+    # Renaming the root does not traverse its children. Deep checks belong to
+    # the detached retirement process, not the critical path to new content.
+    if (-not ((Get-SafeAttributes $p) -band [IO.FileAttributes]::Directory)) {
+        throw "Expected a directory: $p"
+    }
 }
 # A handled FileNotFoundException must not become the process exit status.
 exit 0

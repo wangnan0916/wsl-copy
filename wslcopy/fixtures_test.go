@@ -65,6 +65,7 @@ func newLocalFixture(t *testing.T) localFixture {
 		"TEST_TARGET_NATIVE": f.native,
 		"TEST_SOURCE_NATIVE": `\\wsl.localhost\TestDistro\source`, "TEST_PARENT_NATIVE": `Q:\portable`,
 		"TEST_NATIVE_ERROR": "", "TEST_EXTRACT_FAIL": "", "TEST_CLEANUP_FAIL": "",
+		"TEST_CLEANUP_GATE": "", "TEST_CLEANUP_READY": "", "TEST_CLEANUP_START_FAIL": "",
 		"XDG_CONFIG_HOME": filepath.Join(root, "config"),
 	} {
 		t.Setenv(key, value)
@@ -84,10 +85,20 @@ if [ "$TEST_NATIVE_ERROR" = '1' ]; then echo 'preparation refused' >&2; exit 1; 
 for script do :; done
 case "$script" in
   *'Refusing an unrecognized retirement directory'*)
-    if [ "$TEST_CLEANUP_FAIL" = '1' ]; then echo 'simulated cleanup failure' >&2; exit 24; fi
     name=$(printf '%s' "$script" | grep -oE '\.wsl-copy-[0-9]+' | head -n 1)
     test -n "$name"
-    rm -rf -- "$TEST_PARENT/$name"
+    printf 'running\n' >> "$TEST_PARENT/$name/cleanup.log"
+    if [ -n "$TEST_CLEANUP_GATE" ]; then
+      printf '%s\n' "$$" > "$TEST_CLEANUP_READY"
+      read -r release < "$TEST_CLEANUP_GATE"
+    fi
+    if [ "$TEST_CLEANUP_FAIL" = '1' ]; then
+      printf 'failed: simulated cleanup failure\n' >> "$TEST_PARENT/$name/cleanup.log"
+      exit 24
+    fi
+    rm -rf -- "$TEST_PARENT/$name/previous"
+    rm -- "$TEST_PARENT/$name/cleanup.log"
+    rmdir -- "$TEST_PARENT/$name"
     ;;
 esac
 `)
@@ -103,9 +114,17 @@ if [ "$TEST_EXTRACT_FAIL" = '1' ]; then
   echo 'simulated extraction failure' >&2
   exit 2
 fi
+if [ "$TEST_CLEANUP_START_FAIL" = '1' ]; then
+  rm -- "${0%/*}/powershell.exe"
+fi
 unset TAR_OPTIONS
 exec "$TEST_GNU_TAR" "$mode" "$archive" -C "$TEST_TARGET" "$@"
 `)
+	t.Cleanup(func() {
+		if err := waitRetirements(f.parent); err != nil {
+			t.Error(err)
+		}
+	})
 	return f
 }
 
