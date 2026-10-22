@@ -12,33 +12,21 @@ Use it to copy build artifacts, front-end bundles or WeChat mini-program output 
 
 ### Install in WSL (no Go required)
 
-[v0.1.0](https://github.com/wangnan0916/wsl-copy/releases/tag/v0.1.0) is the initial preview release. Run the following in a **WSL terminal**, not Windows PowerShell. It selects the architecture, verifies SHA-256 checksums and installs for the current user without `sudo`:
+Run this one command in a **WSL terminal**, not Windows PowerShell:
 
 ```bash
-(
-  set -eu
-  version=v0.1.0
-  case "$(uname -m)" in
-    x86_64) arch=amd64 ;;
-    aarch64|arm64) arch=arm64 ;;
-    *) echo "Unsupported architecture" >&2; exit 1 ;;
-  esac
-  work="$(mktemp -d)"
-  trap 'rm -rf "$work"' EXIT
-  cd "$work"
-  base="https://github.com/wangnan0916/wsl-copy/releases/download/$version"
-  curl -fLO "$base/wsl-copy-linux-$arch.tar.gz"
-  curl -fLO "$base/SHA256SUMS"
-  sha256sum --ignore-missing -c SHA256SUMS
-  tar -xzf "wsl-copy-linux-$arch.tar.gz"
-  install -Dm755 wsl-copy "$HOME/.local/bin/wsl-copy"
-  install -Dm644 LICENSE "$HOME/.local/share/wsl-copy/LICENSE"
-  install -Dm644 THIRD_PARTY_NOTICES "$HOME/.local/share/wsl-copy/THIRD_PARTY_NOTICES"
-  "$HOME/.local/bin/wsl-copy" --version
-)
+curl -fsSL https://raw.githubusercontent.com/wangnan0916/wsl-copy/main/install.sh | sh
 ```
 
-The executable is installed at `~/.local/bin/wsl-copy`; license notices are kept in `~/.local/share/wsl-copy/`. The PATH command below applies to the current shell; add it to your shell startup file if `~/.local/bin` is not already on your PATH. To upgrade, change `version` to the desired published tag and rerun the installation block; it replaces the installed executable and license notices. There is no automatic updater.
+The [installer](install.sh) detects x86-64 or ARM64, downloads the newest public GitHub release **including prereleases**, verifies the archive's SHA256 checksum, and installs `~/.local/bin/wsl-copy` with license notices in `~/.local/share/wsl-copy/`. It uses curl and standard WSL utilities; no Go, Python or sudo is needed. [v0.1.0](https://github.com/wangnan0916/wsl-copy/releases/tag/v0.1.0) is the initial preview release.
+
+To pin a version or bypass GitHub API rate limits when discovering releases:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/wangnan0916/wsl-copy/main/install.sh | sh -s -- v0.1.0
+```
+
+Rerun the installer to upgrade; it replaces the installed executable and license notices only after download, checksum and binary-version checks pass. There is no background updater. The installer does not modify shell configuration, install dependencies or guess Windows tool locations. It prints PATH instructions and warns about missing runtime tools; see [Windows tool paths](#windows-tool-paths). Add the PATH command below to your shell startup file if needed. You can read or download `install.sh` before running it instead of piping remote code into a shell.
 
 Then copy an existing WSL directory to a **new** Windows directory:
 
@@ -86,7 +74,7 @@ Single files, Windows-mounted sources, UNC/device destinations, drive roots, `..
 If Windows executables are not on your WSL `PATH`, supply their **WSL executable paths**:
 
 ```bash
-./dist/wsl-copy "$HOME/project/dist" 'D:\Copies\my-build' \
+wsl-copy "$HOME/project/dist" 'D:\Copies\my-build' \
   --windows-tar /path/to/tar.exe \
   --powershell /path/to/powershell.exe
 ```
@@ -123,7 +111,8 @@ result, err := wslcopy.Copy(ctx, wslcopy.Options{
 ├── .github/workflows/release.yml  # CI builds and tag-triggered releases
 ├── cmd/wsl-copy/
 │   ├── main.go                    # Arguments, signals and CLI output
-│   └── main_test.go               # Argument, help and version tests
+│   ├── main_test.go               # Argument, help and version tests
+│   └── install_test.go            # Installer checks with isolated downloads
 ├── wslcopy/
 │   ├── copy.go, copy_test.go       # Public API and copy orchestration
 │   ├── paths.go, paths_test.go     # Path, filename and source-tree validation
@@ -132,6 +121,7 @@ result, err := wslcopy.Copy(ctx, wslcopy.Options{
 │   ├── cli_test.go                # Compiled CLI/library boundary tests
 │   ├── integration_test.go        # Opt-in native Windows tests
 │   └── scripts/check-destination.ps1 # Embedded read-only Windows checks
+├── install.sh                    # User-local release installer
 ├── README.md
 ├── LICENSE, THIRD_PARTY_NOTICES
 ├── Makefile
@@ -221,6 +211,7 @@ Tests are organized by contract, not repeated across every layer:
 - `wslcopy/copy_test.go` covers safety, dry-run validation, caller cancellation and exclusive destination creation.
 - `wslcopy/command_test.go` exercises transfers through the public `Copy` API: content, empty directories, packing/extraction failures, ownership and archive cleanup. `paths_test.go` holds path and filename validation tables.
 - `cmd/wsl-copy/main_test.go` covers arguments, help and version output. `wslcopy/cli_test.go` builds the real CLI and checks only its JSON, diagnostics and exit codes from outside the checkout, including omitted fields and invalid-UTF-8 replacement.
+- `cmd/wsl-copy/install_test.go` exercises the shell installer from stdin using local release fixtures and an isolated HOME: version/architecture selection, checksum and download failures, and temporary-file cleanup. It does not install into the developer's actual home or use the network.
 - `wslcopy/integration_test.go` covers native Windows path checks, junctions, tar compatibility and retention of an actual Windows destination after failure.
 
 Shared fixtures live in `wslcopy/fixtures_test.go`. Tree assertions compare exact entry sets, types and contents; the local tar shim forwards extraction arguments after translating the destination path. Local command fixtures and GNU tar substitutions are not proof of Windows tar compatibility. Add tests for distinct contracts or reproduced regressions, rather than duplicating filesystem assertions in the CLI layer.
