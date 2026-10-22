@@ -23,10 +23,10 @@ The [installer](install.sh) detects x86-64 or ARM64, downloads the newest public
 To pin a version or bypass GitHub API rate limits when discovering releases:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wangnan0916/wsl-copy/main/install.sh | sh -s -- v0.2.0
+curl -fsSL https://raw.githubusercontent.com/wangnan0916/wsl-copy/main/install.sh | sh -s -- v0.2.1
 ```
 
-Rerun the installer to upgrade an older release. The development CLI also provides `wsl-copy update` (see below). The installer replaces the executable and license notices only after download, checksum and binary-version checks pass. There is no background updater. The installer does not modify shell configuration, install dependencies or guess Windows tool locations. It prints PATH instructions and warns about missing runtime tools; see [Windows tool paths](#windows-tool-paths). Add the PATH command below to your shell startup file if needed. You can read or download `install.sh` before running it instead of piping remote code into a shell.
+Use `wsl-copy update` to upgrade. Releases older than `v0.2.1` need one installer rerun to gain that command (see below). The installer replaces the executable and license notices only after download, checksum and binary-version checks pass. There is no background updater. The installer does not modify shell configuration, install dependencies or guess Windows tool locations. It prints PATH instructions and warns about missing runtime tools; see [Windows tool paths](#windows-tool-paths). Add the PATH command below to your shell startup file if needed. You can read or download `install.sh` before running it instead of piping remote code into a shell.
 
 Then copy an existing WSL directory to a **new** Windows directory:
 
@@ -44,7 +44,7 @@ For manual installation, download the matching archive and `SHA256SUMS` from [Re
 
 ### Update command
 
-**Development version:** `v0.2.0` does not yet contain this command. Build from source, or bootstrap once with the one-command installer after a release containing it is published.
+Available since `v0.2.1`. If you have `v0.2.0` or older, rerun the one-command installer once; subsequent upgrades use the command below.
 
 ```bash
 wsl-copy update           # Newest public release, including prereleases
@@ -133,7 +133,7 @@ Resolution order: explicit options, then `WSL_COPY_WINDOWS_TAR` / `WSL_COPY_POWE
 The public package `github.com/wangnan0916/wsl-copy/wslcopy` (package name `wslcopy`) exposes the copy operation independently of the CLI:
 
 ```bash
-go get github.com/wangnan0916/wsl-copy/wslcopy@v0.2.0
+go get github.com/wangnan0916/wsl-copy/wslcopy@v0.2.1
 ```
 
 ```go
@@ -302,8 +302,8 @@ Only **pushing a new version tag** publishes a GitHub Release. Branch/PR runs an
 After reviewing the commit and running native Windows tests locally, release a new version:
 
 ```bash
-git tag -a v0.2.1 -m "Release v0.2.1"
-git push origin v0.2.1
+git tag -a v0.2.2 -m "Release v0.2.2"
+git push origin v0.2.2
 ```
 
 Tags must use `vMAJOR.MINOR.PATCH` or `vMAJOR.MINOR.PATCH-PRERELEASE`. Tags starting with `v0.` and tags with a prerelease suffix are marked as GitHub prereleases. The workflow uploads the two archives and checksum file to a draft before publishing it. It never overwrites an existing release or its assets; if an upload fails, inspect the draft before any manual recovery. Do not move published tags or replace published assets.
@@ -313,7 +313,7 @@ Hosted Linux CI cannot replace WSL/Windows-native tests; ARM64 remains cross-bui
 ### Local release builds
 
 ```bash
-make release VERSION=v0.2.0
+make release VERSION=v0.2.1
 ```
 
 This builds `dist/wsl-copy-linux-amd64` and `dist/wsl-copy-linux-arm64` with CGO disabled, then packages each as `dist/wsl-copy-linux-<arch>.tar.gz` with `LICENSE` and `THIRD_PARTY_NOTICES`. `dist/SHA256SUMS` covers the two release archives. It does not install commands or publish anything.
