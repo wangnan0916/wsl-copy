@@ -48,11 +48,10 @@ For manual installation, download the matching archive and `SHA256SUMS` from [Re
 
 ```bash
 wsl-copy update           # Newest public release, including prereleases
-wsl-copy update v0.2.0    # Install a specific published version (including downgrade)
 wsl-copy update --help
 ```
 
-This is an explicit, foreground update, not a background updater. It downloads the official `main/install.sh` over HTTPS, completely and with a 64 KiB limit before execution. Installer redirects are refused, HTTP operations are bounded, and the update has a five-minute overall timeout. The existing installer performs release checksum/version checks and staged executable replacement; dependencies are not installed automatically.
+This command takes no version arguments: it always installs the newest public release. It is an explicit, foreground update, not a background updater. It downloads the official `main/install.sh` over HTTPS, completely and with a 64 KiB limit before execution. Installer redirects are refused, HTTP operations are bounded, and the update has a five-minute overall timeout. The existing installer performs release checksum/version checks and staged executable replacement; dependencies are not installed automatically.
 
 Updates always install to `$HOME/.local/bin/wsl-copy`, with notices under `$HOME/.local/share/wsl-copy`. They do not modify user configuration, copy targets, shell startup files or a custom binary at another location. Update bypasses copy configuration and Windows-tool preflight, and prints installer progress as text rather than copy JSON. Argument errors exit 2; download/install errors exit 1. Cancellation signals the installer and its child processes so cleanup traps can run; cancellation after executable replacement cannot undo that committed update.
 

@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -24,7 +23,7 @@ func runUpdate(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("wsl-copy update", flag.ContinueOnError)
 	fs.SetOutput(stdout)
 	fs.Usage = func() {
-		fmt.Fprintln(stdout, "Usage: wsl-copy update [VERSION]\n\nInstall the newest public release (including prereleases), or the specified version,\nto $HOME/.local/bin/wsl-copy using the official HTTPS installer.\nConfiguration, copy targets and shell settings are unchanged. No sudo or Go required.\nA custom binary outside that location is not replaced. Output is text, not copy JSON.")
+		fmt.Fprintln(stdout, "Usage: wsl-copy update\n\nInstall the newest public release (including prereleases)\nto $HOME/.local/bin/wsl-copy using the official HTTPS installer.\nConfiguration, copy targets and shell settings are unchanged. No sudo or Go required.\nA custom binary outside that location is not replaced. Output is text, not copy JSON.")
 	}
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -33,8 +32,8 @@ func runUpdate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "wsl-copy update:", err)
 		return 2
 	}
-	if fs.NArg() > 1 || (fs.NArg() == 1 && !regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$`).MatchString(fs.Arg(0))) {
-		fmt.Fprintln(stderr, "wsl-copy update: expected optional VERSION, such as v0.2.1; use --help")
+	if fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "wsl-copy update: no arguments accepted; updates to the newest public release")
 		return 2
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
@@ -42,14 +41,14 @@ func runUpdate(args []string, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	fmt.Fprintln(stdout, "Fetching the official wsl-copy installer...")
-	if err := updateInstallation(ctx, installerURL, fs.Args(), stdout, stderr); err != nil {
+	if err := updateInstallation(ctx, installerURL, stdout, stderr); err != nil {
 		fmt.Fprintln(stderr, "wsl-copy update:", err)
 		return 1
 	}
 	return 0
 }
 
-func updateInstallation(ctx context.Context, url string, versions []string, stdout, stderr io.Writer) error {
+func updateInstallation(ctx context.Context, url string, stdout, stderr io.Writer) error {
 	// Download completely before execution; never run a partial curl | sh stream.
 	client := &http.Client{
 		Timeout: 30 * time.Second,
@@ -83,7 +82,7 @@ func updateInstallation(ctx context.Context, url string, versions []string, stdo
 		return errors.New("installer is empty or exceeds 64 KiB")
 	}
 	// Reuse installer checksum/version checks, staged replacement and cleanup.
-	cmd := exec.CommandContext(ctx, "sh", append([]string{"-s", "--"}, versions...)...)
+	cmd := exec.CommandContext(ctx, "sh", "-s", "--")
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = strings.NewReader(string(script)), stdout, stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {

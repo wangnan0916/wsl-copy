@@ -24,14 +24,13 @@ func TestUpdateArguments(t *testing.T) {
 		code int
 	}{
 		{[]string{"update", "--help"}, 0}, {[]string{"update", "-h"}, 0},
-		{[]string{"update", "--unknown"}, 2}, {[]string{"update", "v0.2.1", "extra"}, 2},
-		{[]string{"update", "https://example.com/script"}, 2}, {[]string{"update", "v0.2.1;echo bad"}, 2},
+		{[]string{"update", "--unknown"}, 2}, {[]string{"update", "v0.2.1"}, 2},
 	} {
 		var stdout, stderr bytes.Buffer
 		if code := runCLI(tc.args, &stdout, &stderr); code != tc.code {
 			t.Fatalf("%q: exit %d, stdout %s, stderr %s", tc.args, code, &stdout, &stderr)
 		}
-		if tc.code == 0 && !strings.Contains(stdout.String(), "Usage: wsl-copy update [VERSION]") {
+		if tc.code == 0 && !strings.Contains(stdout.String(), "Usage: wsl-copy update") {
 			t.Fatal("update help missing:", &stdout)
 		}
 	}
@@ -51,7 +50,7 @@ func TestUpdateCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- updateInstallation(ctx, server.URL, nil, io.Discard, io.Discard) }()
+	go func() { done <- updateInstallation(ctx, server.URL, io.Discard, io.Discard) }()
 	deadline := time.After(5 * time.Second)
 	for {
 		if _, err := os.Stat(started); err == nil {
@@ -116,7 +115,7 @@ func TestUpdateDownloadGuards(t *testing.T) {
 			if mode == "cancelled" {
 				cancel()
 			}
-			if err := updateInstallation(ctx, server.URL, nil, io.Discard, io.Discard); err == nil {
+			if err := updateInstallation(ctx, server.URL, io.Discard, io.Discard); err == nil {
 				t.Fatal("unsafe/incomplete download accepted")
 			}
 			if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {

@@ -46,7 +46,6 @@ func TestInstaller(t *testing.T) {
 	}{
 		{name: "latest", arch: "x86_64"},
 		{name: "update-latest", arch: "x86_64", update: true},
-		{name: "update-pinned", arch: "x86_64", version: "v0.1.0", update: true},
 		{name: "update-checksum", arch: "x86_64", fault: "checksum", wantError: "Checksum verification failed", update: true},
 		{name: "explicit", arch: "x86_64", version: "v0.1.0"},
 		{name: "arm64-selection", arch: "aarch64"},
@@ -136,12 +135,8 @@ exec "$TEST_REAL_INSTALL" "$@"
 					}
 				}))
 				defer server.Close()
-				var versions []string
-				if tc.version != "" {
-					versions = []string{tc.version}
-				}
 				var output bytes.Buffer
-				err = updateInstallation(t.Context(), server.URL, versions, &output, &output)
+				err = updateInstallation(t.Context(), server.URL, &output, &output)
 				out = output.Bytes()
 			} else {
 				out, err = cmd.CombinedOutput()
