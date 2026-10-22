@@ -19,6 +19,12 @@ import (
 //go:embed scripts/check-destination.ps1
 var destinationScript string
 
+//go:embed scripts/safe-tree.ps1
+var safeTreeScript string
+
+//go:embed scripts/remove-previous.ps1
+var removePreviousScript string
+
 type commandRunner struct {
 	ctx    context.Context
 	stderr io.Writer
@@ -68,12 +74,19 @@ func psQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
-func (r commandRunner) checkDestination(target windowsPath, powershell string) error {
+func nativePaths(target windowsPath) string {
 	parents := make([]string, 0, len(target.ancestors))
 	for _, parent := range target.ancestors {
 		parents = append(parents, psQuote(`\\?\`+parent))
 	}
-	script := "$parents = @(" + strings.Join(parents, ", ") + "); $p = " + psQuote(`\\?\`+target.native) + ";\n" + destinationScript
+	return "$parents = @(" + strings.Join(parents, ", ") + "); $p = " + psQuote(`\\?\`+target.native) + ";\n"
+}
+
+func (r commandRunner) checkDestination(target windowsPath, powershell string, replace bool, mappingRoot string) error {
+	if mappingRoot != "" {
+		mappingRoot = `\\?\` + mappingRoot
+	}
+	script := nativePaths(target) + "$replace = $" + strconv.FormatBool(replace) + "; $mappingRoot = " + psQuote(mappingRoot) + ";\n" + safeTreeScript + destinationScript
 	_, err := r.run(nil, nil, powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script)
 	return err
 }

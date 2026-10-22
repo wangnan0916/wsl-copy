@@ -64,7 +64,8 @@ func newLocalFixture(t *testing.T) localFixture {
 		"TEST_SOURCE": f.source, "TEST_PARENT": f.parent, "TEST_TARGET": f.target, "TEST_GNU_TAR": gnuTar,
 		"TEST_TARGET_NATIVE": f.native,
 		"TEST_SOURCE_NATIVE": `\\wsl.localhost\TestDistro\source`, "TEST_PARENT_NATIVE": `Q:\portable`,
-		"TEST_NATIVE_ERROR": "", "TEST_EXTRACT_FAIL": "",
+		"TEST_NATIVE_ERROR": "", "TEST_EXTRACT_FAIL": "", "TEST_CLEANUP_FAIL": "",
+		"XDG_CONFIG_HOME": filepath.Join(root, "config"),
 	} {
 		t.Setenv(key, value)
 	}
@@ -80,6 +81,15 @@ exit 91
 `)
 	writeScript(t, filepath.Join(f.bin, "powershell.exe"), `
 if [ "$TEST_NATIVE_ERROR" = '1' ]; then echo 'preparation refused' >&2; exit 1; fi
+for script do :; done
+case "$script" in
+  *'Refusing an unrecognized retirement directory'*)
+    if [ "$TEST_CLEANUP_FAIL" = '1' ]; then echo 'simulated cleanup failure' >&2; exit 24; fi
+    name=$(printf '%s' "$script" | grep -oE '\.wsl-copy-[0-9]+' | head -n 1)
+    test -n "$name"
+    rm -rf -- "$TEST_PARENT/$name"
+    ;;
+esac
 `)
 	writeScript(t, filepath.Join(f.bin, "tar.exe"), `
 if [ "$#" -lt 4 ] || [ "$3" != '-C' ] || [ "$4" != "$TEST_TARGET_NATIVE" ]; then

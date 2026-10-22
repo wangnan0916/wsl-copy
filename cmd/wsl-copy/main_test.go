@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -14,7 +16,36 @@ func must(t *testing.T, err error) {
 	}
 }
 
+func TestMappingOptions(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("WSL_COPY_WINDOWS_TAR", "")
+	t.Setenv("WSL_COPY_POWERSHELL", "")
+	must(t, os.Mkdir(filepath.Join(dir, "wsl-copy"), 0700))
+	must(t, os.WriteFile(filepath.Join(dir, "wsl-copy", "config.json"), []byte(`{"source_root":"/source","windows_root":"Q:\\mirror","replace":true,"windows_tar":"/configured/tar.exe"}`), 0600))
+	opts, err := parseOptions([]string{"/source/project"}, io.Discard)
+	must(t, err)
+	if opts.SourceRoot != "/source" || opts.WindowsRoot != `Q:\mirror` || !opts.Replace || opts.WindowsTar != "/configured/tar.exe" {
+		t.Fatal("configuration not applied:", opts)
+	}
+	t.Setenv("WSL_COPY_WINDOWS_TAR", "/environment/tar.exe")
+	opts, err = parseOptions([]string{"/source/project", `R:\explicit`, "--replace=false", "--source-root", "/override"}, io.Discard)
+	must(t, err)
+	if opts.Replace || opts.WindowsTarget != `R:\explicit` || opts.SourceRoot != "/override" || opts.WindowsTar != "/environment/tar.exe" {
+		t.Fatal("explicit options or environment precedence lost:", opts)
+	}
+	opts, err = parseOptions([]string{"/source/project", `R:\explicit`, "--config=", "--windows-tar", "/flag/tar.exe"}, io.Discard)
+	must(t, err)
+	if opts.Replace || opts.SourceRoot != "" || opts.WindowsTar != "/flag/tar.exe" {
+		t.Fatal("configuration not disabled or flag ignored:", opts)
+	}
+	if _, err := parseOptions([]string{"/source/project", "--config="}, io.Discard); err == nil {
+		t.Fatal("missing target/mapping accepted")
+	}
+}
+
 func TestOptions(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("WSL_COPY_WINDOWS_TAR", "/env/tar.exe")
 	t.Setenv("WSL_COPY_POWERSHELL", "/env/powershell.exe")
 	for _, args := range [][]string{
@@ -47,7 +78,7 @@ func TestOptions(t *testing.T) {
 	}
 	for _, args := range [][]string{
 		nil, {"/source"}, {"/source", `Q:\destination`, "extra"},
-		{"/source", `Q:\destination`, "--replace"}, {"--windows-tar"}, {"--powershell"},
+		{"/source", `Q:\destination`, "--unknown"}, {"--windows-tar"}, {"--powershell"},
 		{"/source", `Q:\destination`, "--dry-run=invalid"}, {"/source", `Q:\destination`, "-dry-run"},
 	} {
 		var stdout, stderr bytes.Buffer

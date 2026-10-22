@@ -31,18 +31,27 @@ type result struct {
 	ElapsedSeconds      float64 `json:"elapsed_seconds"`
 	Error               string  `json:"error,omitempty"`
 	DestinationRetained bool    `json:"destination_retained,omitzero"`
+	PreviousWindowsPath string  `json:"previous_windows_path,omitempty"`
+	RetainedWindowsPath string  `json:"retained_windows_path,omitempty"`
+	DestinationRestored bool    `json:"destination_restored,omitzero"`
+	CleanupError        string  `json:"cleanup_error,omitempty"`
 }
 
 func parseOptions(args []string, output io.Writer) (options, error) {
 	var opts options
 	fs := flag.NewFlagSet("wsl-copy", flag.ContinueOnError)
 	fs.SetOutput(output)
-	fs.BoolVar(&opts.DryRun, "dry-run", false, "validate without creating a destination or running tar")
+	var configPath string
+	fs.StringVar(&configPath, "config", "", "JSON config path (default: user config directory/wsl-copy/config.json; empty disables)")
+	fs.StringVar(&opts.SourceRoot, "source-root", "", "WSL root for automatic source-relative target mapping")
+	fs.StringVar(&opts.WindowsRoot, "windows-root", "", "existing Windows root for automatic target mapping")
+	fs.BoolVar(&opts.Replace, "replace", false, "rename an existing directory, copy, then retire the old directory")
+	fs.BoolVar(&opts.DryRun, "dry-run", false, "validate without creating, renaming or deleting directories or running tar")
 	fs.BoolVar(&opts.showVersion, "version", false, "print the version")
 	fs.StringVar(&opts.WindowsTar, "windows-tar", os.Getenv("WSL_COPY_WINDOWS_TAR"), "WSL executable path (default: WSL_COPY_WINDOWS_TAR or tar.exe on PATH)")
 	fs.StringVar(&opts.PowerShell, "powershell", os.Getenv("WSL_COPY_POWERSHELL"), "WSL executable path (default: WSL_COPY_POWERSHELL or powershell.exe on PATH)")
 	fs.Usage = func() {
-		fmt.Fprintln(output, "Usage: wsl-copy SOURCE WINDOWS_TARGET [options]\n\nCopy a WSL directory to a new Windows directory. Its parent must already exist.")
+		fmt.Fprintln(output, "Usage: wsl-copy SOURCE [WINDOWS_TARGET] [options]\n\nCopy a WSL directory to Windows. Specify a target or configure source-relative mapping.\nExisting targets are refused unless --replace or configuration enables replacement.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -51,10 +60,32 @@ func parseOptions(args []string, output io.Writer) (options, error) {
 	if opts.showVersion {
 		return opts, nil
 	}
-	if fs.NArg() != 2 {
-		return opts, errors.New("expected SOURCE and WINDOWS_TARGET; use --help for usage")
+	if fs.NArg() < 1 || fs.NArg() > 2 {
+		return opts, errors.New("expected SOURCE and optional WINDOWS_TARGET; use --help for usage")
+	}
+	cfg, err := loadConfig(configPath, fs.Changed("config"))
+	if err != nil {
+		return opts, err
+	}
+	for _, item := range []struct {
+		name     string
+		value    *string
+		fallback string
+	}{
+		{"source-root", &opts.SourceRoot, cfg.SourceRoot}, {"windows-root", &opts.WindowsRoot, cfg.WindowsRoot},
+		{"windows-tar", &opts.WindowsTar, cfg.WindowsTar}, {"powershell", &opts.PowerShell, cfg.PowerShell},
+	} {
+		if !fs.Changed(item.name) && *item.value == "" {
+			*item.value = item.fallback
+		}
+	}
+	if !fs.Changed("replace") {
+		opts.Replace = cfg.Replace
 	}
 	opts.Source, opts.WindowsTarget = fs.Arg(0), fs.Arg(1)
+	if opts.WindowsTarget == "" && (opts.SourceRoot == "" || opts.WindowsRoot == "") {
+		return opts, errors.New("expected WINDOWS_TARGET or both --source-root and --windows-root (also available in config)")
+	}
 	return opts, nil
 }
 
@@ -76,18 +107,33 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 	start := time.Now()
 	opts.Diagnostics = stderr
 	copied, err := wslcopy.Copy(ctx, opts.Options)
-	output := result{Status: "failed", SourcePath: copied.SourcePath, WindowsPath: copied.WindowsPath}
+	output := result{
+		Status: "failed", SourcePath: copied.SourcePath, WindowsPath: copied.WindowsPath,
+		PreviousWindowsPath: copied.PreviousWindowsPath, RetainedWindowsPath: copied.RetainedWindowsPath,
+		DestinationRestored: copied.DestinationRestored, CleanupError: copied.CleanupError,
+	}
 	if err != nil {
 		output.Error = err.Error()
 		output.DestinationRetained = copied.DestinationCreated
 		fmt.Fprintln(stderr, "wsl-copy:", err)
-		if copied.DestinationCreated {
+		if copied.RetainedWindowsPath != "" {
+			fmt.Fprintln(stderr, "Failed output retained at:", copied.RetainedWindowsPath)
+		} else if copied.DestinationCreated {
 			fmt.Fprintln(stderr, "The destination was retained; no destination files were deleted.")
+		}
+		if copied.DestinationRestored {
+			fmt.Fprintln(stderr, "The previous directory was restored.")
 		}
 	} else if opts.DryRun {
 		output.Status = "dry_run"
 	} else {
 		output.Status = "copied"
+	}
+	if copied.PreviousWindowsPath != "" {
+		fmt.Fprintln(stderr, "Previous data last known at:", copied.PreviousWindowsPath)
+	}
+	if copied.CleanupError != "" {
+		fmt.Fprintln(stderr, "Copy completed; previous-directory cleanup failed:", copied.CleanupError)
 	}
 	output.ElapsedSeconds = math.Round(time.Since(start).Seconds()*1000) / 1000
 	encoder := json.NewEncoder(stdout)

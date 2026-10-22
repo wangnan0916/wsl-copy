@@ -1,4 +1,4 @@
-// Package wslcopy copies WSL directories to new Windows directories without overwriting existing targets.
+// Package wslcopy copies WSL directories to Windows, with optional path mapping and directory replacement.
 package wslcopy
 
 import (
@@ -13,12 +13,17 @@ import (
 	"strings"
 )
 
-// Options configures a create-only copy.
+// Options configures copying. Existing destinations are refused unless Replace is enabled.
 type Options struct {
 	// Source must be an absolute WSL filesystem directory.
 	Source string
-	// WindowsTarget must be an absent Windows drive path with an existing parent.
+	// WindowsTarget is an explicit Windows drive path with an existing parent.
 	WindowsTarget string
+	// SourceRoot and WindowsRoot map source-relative paths when WindowsTarget is empty.
+	// Both roots must exist; missing parents below WindowsRoot may be created.
+	SourceRoot, WindowsRoot string
+	// Replace permits retiring an existing ordinary directory before copying.
+	Replace bool
 	// WSL executable paths; empty values resolve tar.exe and powershell.exe through PATH.
 	WindowsTar, PowerShell string
 	// DryRun validates without creating a destination or running tar.
@@ -33,11 +38,20 @@ type Result struct {
 	// DestinationCreated is true only if this call created the destination.
 	// It remains true if packing or extraction subsequently fails.
 	DestinationCreated bool
+	// PreviousWindowsPath is the last-known location of retired data, if retained.
+	// Cleanup failure may leave this tree only partly present.
+	PreviousWindowsPath string
+	// RetainedWindowsPath locates failed new output, including after rollback.
+	RetainedWindowsPath string
+	DestinationRestored bool
+	// CleanupError is a warning after a successful copy, not a reason to roll back.
+	CleanupError string
 }
 
-// Copy copies a WSL directory to a new Windows directory, or validates it in dry-run mode.
-// The source and destination parent must remain stable until Copy returns.
-// Result is meaningful even on error: a destination created by this call is never deleted.
+// Copy copies a WSL directory to Windows, or validates it in dry-run mode.
+// Keep the source, destination parent and retired tree stable until Copy returns.
+// Failed new output is never deleted. Replacement may restore the old directory
+// and move failed output to RetainedWindowsPath. Inspect Result even on error.
 func Copy(ctx context.Context, opts Options) (Result, error) {
 	var output Result
 	r := commandRunner{ctx, cmp.Or(opts.Diagnostics, io.Discard)}
@@ -48,7 +62,7 @@ func Copy(ctx context.Context, opts Options) (Result, error) {
 	if err != nil {
 		return output, err
 	}
-	target, err := destinationPath(opts.WindowsTarget)
+	target, mappingRoot, err := resolveDestination(source, opts)
 	if err != nil {
 		return output, err
 	}
@@ -73,7 +87,7 @@ func Copy(ctx context.Context, opts Options) (Result, error) {
 	if volume == "" || !strings.EqualFold(uncVolume(sourceNative), volume) {
 		return output, errors.New("source must be on the WSL filesystem, not a Windows drive or network share")
 	}
-	if err := r.checkDestination(target, powershell); err != nil {
+	if err := r.checkDestination(target, powershell, opts.Replace, mappingRoot); err != nil {
 		return output, err
 	}
 	parent, err := r.convertPath(target.parent, "-u")
@@ -83,7 +97,7 @@ func Copy(ctx context.Context, opts Options) (Result, error) {
 	if !filepath.IsAbs(parent) {
 		return output, errors.New("wslpath did not return an absolute destination parent path")
 	}
-	if err := checkDirectory(parent); err != nil {
+	if err := checkDirectory(parent, mappingRoot != ""); err != nil {
 		return output, err
 	}
 	mapped, err := r.convertPath(parent, "-w")
@@ -94,8 +108,14 @@ func Copy(ctx context.Context, opts Options) (Result, error) {
 		return output, errors.New("destination parent does not map to the requested Windows directory")
 	}
 	local := filepath.Join(parent, target.leaf)
-	if _, err := os.Lstat(local); err == nil {
-		return output, fmt.Errorf("destination already exists: %s", target.native)
+	previous, err := os.Lstat(local)
+	if err == nil {
+		if !opts.Replace {
+			return output, fmt.Errorf("destination already exists: %s", target.native)
+		}
+		if !previous.IsDir() || previous.Mode()&os.ModeSymlink != 0 {
+			return output, errors.New("replacement requires an ordinary directory")
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return output, err
 	}
@@ -107,6 +127,18 @@ func Copy(ctx context.Context, opts Options) (Result, error) {
 	}
 	if opts.DryRun {
 		return output, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return output, err
+	}
+	if mappingRoot != "" {
+		if err := os.MkdirAll(parent, 0777); err != nil {
+			return output, err
+		}
+	}
+	if previous != nil {
+		err := r.replaceAndCopy(source, local, target, previous, windowsTar, powershell, &output)
+		return output, err
 	}
 	output.DestinationCreated, err = r.createAndCopy(source, local, target.native, windowsTar)
 	return output, err

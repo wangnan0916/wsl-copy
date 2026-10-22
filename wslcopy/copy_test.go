@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -34,46 +35,64 @@ func TestCopy(t *testing.T) {
 			t.Fatal("library wrote to process stdout/stderr")
 		}
 	})
-	t.Run("cancel-during-extraction", func(t *testing.T) {
-		f := newLocalFixture(t)
-		readyPath := filepath.Join(t.TempDir(), "ready")
-		must(t, syscall.Mkfifo(readyPath, 0600))
-		ready, err := os.OpenFile(readyPath, os.O_RDWR, 0)
-		must(t, err)
-		defer ready.Close()
-		t.Setenv("TEST_READY", readyPath)
-		writeScript(t, filepath.Join(f.bin, "tar.exe"), "printf 'partial data' > \"$TEST_TARGET/partial\"\nprintf 1 > \"$TEST_READY\"\nexec sleep 30\n")
-		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-		defer cancel()
-		stop := context.AfterFunc(ctx, func() { ready.Close() })
-		defer stop()
-		type outcome struct {
-			result Result
-			err    error
-		}
-		done := make(chan outcome, 1)
-		go func() {
-			output, err := Copy(ctx, f.options())
-			done <- outcome{output, err}
-		}()
-		// Block on a pipe, not polling: the extractor must have started and written partial data.
-		var marker [1]byte
-		_, readyErr := io.ReadFull(ready, marker[:])
-		cancel()
-		output := <-done
-		must(t, readyErr)
-		if !errors.Is(output.err, context.Canceled) || !output.result.DestinationCreated {
-			t.Fatalf("cancellation identity or ownership lost: %+v; %v", output.result, output.err)
-		}
-		if readFile(t, filepath.Join(f.target, "partial")) != "partial data" {
-			t.Fatal("partial destination removed after cancellation")
-		}
-		entries, err := os.ReadDir(f.archives)
-		must(t, err)
-		if len(entries) != 0 {
-			t.Fatal("temporary archive leaked after cancellation")
-		}
-	})
+	for _, replace := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancel-during-extraction-replace-%t", replace), func(t *testing.T) {
+			f := newLocalFixture(t)
+			opts := f.options()
+			opts.Replace = replace
+			if replace {
+				must(t, os.Mkdir(f.target, 0700))
+				writeFile(t, filepath.Join(f.target, "old-only"), "keep previous")
+			}
+			readyPath := filepath.Join(t.TempDir(), "ready")
+			must(t, syscall.Mkfifo(readyPath, 0600))
+			ready, err := os.OpenFile(readyPath, os.O_RDWR, 0)
+			must(t, err)
+			defer ready.Close()
+			t.Setenv("TEST_READY", readyPath)
+			writeScript(t, filepath.Join(f.bin, "tar.exe"), "printf 'partial data' > \"$TEST_TARGET/partial\"\nprintf 1 > \"$TEST_READY\"\nexec sleep 30\n")
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			stop := context.AfterFunc(ctx, func() { ready.Close() })
+			defer stop()
+			type outcome struct {
+				result Result
+				err    error
+			}
+			done := make(chan outcome, 1)
+			go func() {
+				output, err := Copy(ctx, opts)
+				done <- outcome{output, err}
+			}()
+			// Block on a pipe, not polling: the extractor must have started and written partial data.
+			var marker [1]byte
+			_, readyErr := io.ReadFull(ready, marker[:])
+			cancel()
+			output := <-done
+			must(t, readyErr)
+			if !errors.Is(output.err, context.Canceled) || !output.result.DestinationCreated {
+				t.Fatalf("cancellation identity or ownership lost: %+v; %v", output.result, output.err)
+			}
+			if readFile(t, filepath.Join(f.target, "partial")) != "partial data" {
+				t.Fatal("partial destination removed after cancellation")
+			}
+			if replace {
+				containers, err := filepath.Glob(filepath.Join(f.parent, ".wsl-copy-*"))
+				must(t, err)
+				if len(containers) != 1 || output.result.PreviousWindowsPath == "" || output.result.RetainedWindowsPath != f.native || output.result.DestinationRestored {
+					t.Fatalf("cancellation lost recovery paths: %+v", output.result)
+				}
+				if readFile(t, filepath.Join(containers[0], "previous", "old-only")) != "keep previous" {
+					t.Fatal("cancellation modified previous data")
+				}
+			}
+			entries, err := os.ReadDir(f.archives)
+			must(t, err)
+			if len(entries) != 0 {
+				t.Fatal("temporary archive leaked after cancellation")
+			}
+		})
+	}
 	t.Run("canceled-context", func(t *testing.T) {
 		f := newLocalFixture(t)
 		ctx, cancel := context.WithCancel(t.Context())
@@ -98,12 +117,17 @@ func TestCopy(t *testing.T) {
 					writeFile(t, filepath.Join(f.target, "sentinel"), "keep")
 				}
 			}
-			for _, dryRun := range []bool{false, true} {
-				opts := f.options()
-				opts.DryRun = dryRun
-				output, err := Copy(t.Context(), opts)
-				if err == nil || output.DestinationCreated {
-					t.Fatalf("existing destination not refused (dry-run=%t): %+v; %v", dryRun, output, err)
+			for _, replace := range []bool{false, true} {
+				if replace && kind != "file" && kind != "dangling" {
+					continue // Ordinary directories are covered by TestReplace.
+				}
+				for _, dryRun := range []bool{false, true} {
+					opts := f.options()
+					opts.DryRun, opts.Replace = dryRun, replace
+					output, err := Copy(t.Context(), opts)
+					if err == nil || output.DestinationCreated {
+						t.Fatalf("existing destination not refused (dry-run=%t, replace=%t): %+v; %v", dryRun, replace, output, err)
+					}
 				}
 			}
 			if kind == "file" && readFile(t, f.target) != "keep" || kind == "nonempty" && readFile(t, filepath.Join(f.target, "sentinel")) != "keep" {

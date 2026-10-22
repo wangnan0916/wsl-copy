@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -23,7 +24,7 @@ func TestCLI(t *testing.T) {
 	if output, err := exec.CommandContext(t.Context(), binary, "--version").CombinedOutput(); err != nil || string(output) != "wsl-copy cli-test\n" {
 		t.Fatalf("linked version not reported: %v; %q", err, output)
 	}
-	for _, mode := range []string{"copy", "dry-run", "invalid-source", "prepare-failure", "extract-failure"} {
+	for _, mode := range []string{"copy", "dry-run", "invalid-source", "prepare-failure", "extract-failure", "replace-failure", "replace-cleanup"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newLocalFixture(t)
 			// Explicit fixture tools ensure ambient CLI environment cannot invoke Windows.
@@ -41,6 +42,16 @@ func TestCLI(t *testing.T) {
 				t.Setenv("TEST_NATIVE_ERROR", "1")
 			case "extract-failure":
 				t.Setenv("TEST_EXTRACT_FAIL", "1")
+			case "replace-failure", "replace-cleanup":
+				must(t, os.Mkdir(f.target, 0700))
+				writeFile(t, filepath.Join(f.target, "old-only"), "previous")
+				args = append(args, "--replace")
+				if mode == "replace-failure" {
+					t.Setenv("TEST_EXTRACT_FAIL", "1")
+				} else {
+					status, wantCode = "copied", 0
+					t.Setenv("TEST_CLEANUP_FAIL", "1")
+				}
 			}
 			cmd := exec.CommandContext(t.Context(), binary, args...)
 			cmd.Dir = f.parent // No source checkout or external PowerShell script here.
@@ -78,6 +89,25 @@ func TestCLI(t *testing.T) {
 				if !strings.Contains(stderr.String(), "The destination was retained") {
 					t.Fatal("missing retention diagnostics:", stderr.String())
 				}
+			}
+			if mode == "replace-failure" || mode == "replace-cleanup" {
+				field, suffix := "retained_windows_path", `\partial`
+				if mode == "replace-cleanup" {
+					field, suffix = "previous_windows_path", `\previous`
+					warning, ok := output["cleanup_error"].(string)
+					if !ok || !strings.Contains(warning, "simulated cleanup failure") {
+						t.Fatal("cleanup warning missing:", output)
+					}
+					want["cleanup_error"] = warning
+				} else {
+					want["destination_restored"], want["destination_retained"] = true, true
+					want["error"] = "tar.exe failed (2): simulated extraction failure"
+				}
+				path, ok := output[field].(string)
+				if !ok || !strings.HasPrefix(path, `Q:\portable\.wsl-copy-`) || !strings.HasSuffix(path, suffix) {
+					t.Fatal("recovery path missing or invalid:", output)
+				}
+				want[field] = path
 			}
 			if code != wantCode || !reflect.DeepEqual(output, want) {
 				t.Fatalf("wrong CLI protocol: exit %d (want %d), got %+v, want %+v; stderr %s", code, wantCode, output, want, stderr.String())

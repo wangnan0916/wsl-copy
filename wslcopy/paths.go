@@ -12,13 +12,13 @@ import (
 	"github.com/muonsoft/validation/validate"
 )
 
-func checkDirectory(path string) error {
+func checkDirectory(path string, allowMissing bool) error {
 	for {
 		info, err := os.Lstat(path)
-		if err != nil {
+		if err != nil && !(allowMissing && errors.Is(err, os.ErrNotExist)) {
 			return err
 		}
-		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		if err == nil && (!info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
 			return fmt.Errorf("expected a directory without symlinks: %s", path)
 		}
 		parent := filepath.Dir(path)
@@ -39,7 +39,7 @@ func sourcePath(value string) (string, error) {
 		return "", errors.New("pass an absolute WSL source directory without .. components")
 	}
 	source := filepath.Clean(value)
-	if err := checkDirectory(source); err != nil {
+	if err := checkDirectory(source, false); err != nil {
 		return "", err
 	}
 	temp, err := filepath.EvalSymlinks(os.TempDir())

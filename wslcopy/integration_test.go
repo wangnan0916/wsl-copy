@@ -110,6 +110,7 @@ func TestWindows(t *testing.T) {
 	must(t, err)
 	env.tarVersion = string(output)
 
+	t.Run("replacement", func(t *testing.T) { testWindowsReplacement(t, env) })
 	t.Run("content", func(t *testing.T) {
 		f := newWindowsFixture(t, env)
 		writeFile(t, filepath.Join(f.source, "binary"), "\x00\xffpayload\r\n")
