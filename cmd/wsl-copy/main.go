@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -46,6 +47,7 @@ func parseOptions(args []string, output io.Writer) (options, error) {
 	fs.StringVar(&opts.SourceRoot, "source-root", "", "WSL root for automatic source-relative target mapping")
 	fs.StringVar(&opts.WindowsRoot, "windows-root", "", "existing Windows root for automatic target mapping")
 	fs.BoolVar(&opts.Replace, "replace", false, "rename an existing directory, copy, then retire the old directory in the background")
+	fs.StringVar(&opts.LockFile, "lock-file", "", "shared WSL lock file (default: user cache/wsl-copy/copy.lock; explicit empty disables)")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "validate without creating, renaming or deleting directories or running tar")
 	fs.BoolVar(&opts.showVersion, "version", false, "print the version")
 	fs.StringVar(&opts.WindowsTar, "windows-tar", os.Getenv("WSL_COPY_WINDOWS_TAR"), "WSL executable path (default: WSL_COPY_WINDOWS_TAR or tar.exe on PATH)")
@@ -73,6 +75,7 @@ func parseOptions(args []string, output io.Writer) (options, error) {
 		fallback string
 	}{
 		{"source-root", &opts.SourceRoot, cfg.SourceRoot}, {"windows-root", &opts.WindowsRoot, cfg.WindowsRoot},
+		{"lock-file", &opts.LockFile, cfg.LockFile},
 		{"windows-tar", &opts.WindowsTar, cfg.WindowsTar}, {"powershell", &opts.PowerShell, cfg.PowerShell},
 	} {
 		if !fs.Changed(item.name) && *item.value == "" {
@@ -81,6 +84,13 @@ func parseOptions(args []string, output io.Writer) (options, error) {
 	}
 	if !fs.Changed("replace") {
 		opts.Replace = cfg.Replace
+	}
+	if !fs.Changed("lock-file") && opts.LockFile == "" {
+		dir, err := os.UserCacheDir()
+		if err != nil {
+			return opts, err
+		}
+		opts.LockFile = filepath.Join(dir, "wsl-copy", "copy.lock")
 	}
 	opts.Source, opts.WindowsTarget = fs.Arg(0), fs.Arg(1)
 	if opts.WindowsTarget == "" && (opts.SourceRoot == "" || opts.WindowsRoot == "") {

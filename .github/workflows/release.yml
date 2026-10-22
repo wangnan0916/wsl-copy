@@ -107,6 +107,6 @@ jobs:
 
           Linux tests, race checks, go vet, module verification and packaging checks passed. ARM64 is cross-built only. This hosted Linux workflow does not run WSL/Windows-native tests.
 
-          Windows tar has known emoji, decomposed-Unicode and long-path limitations. See the repository README for requirements, installation, target mapping and the safety contract. Existing targets are refused by default; explicit replacement renames old, copies new and retires old in the background without delaying readiness. No merge or background sync.
+          Windows tar has known emoji, decomposed-Unicode and long-path limitations. See the repository README for requirements, installation, target mapping and the safety contract. Existing targets are refused by default; explicit replacement renames old, copies new and retires old in the background without delaying readiness. The CLI serializes cooperating copies with a shared nonblocking WSL lock; background retirement does not hold it. No merge or background sync.
           NOTES
           gh release edit "$VERSION" --draft=false

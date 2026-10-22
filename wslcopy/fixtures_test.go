@@ -66,7 +66,7 @@ func newLocalFixture(t *testing.T) localFixture {
 		"TEST_SOURCE_NATIVE": `\\wsl.localhost\TestDistro\source`, "TEST_PARENT_NATIVE": `Q:\portable`,
 		"TEST_NATIVE_ERROR": "", "TEST_EXTRACT_FAIL": "", "TEST_CLEANUP_FAIL": "",
 		"TEST_CLEANUP_GATE": "", "TEST_CLEANUP_READY": "", "TEST_CLEANUP_START_FAIL": "",
-		"XDG_CONFIG_HOME": filepath.Join(root, "config"),
+		"XDG_CONFIG_HOME": filepath.Join(root, "config"), "XDG_CACHE_HOME": filepath.Join(root, "cache"),
 	} {
 		t.Setenv(key, value)
 	}
@@ -75,6 +75,7 @@ if [ "$1" = '-w' ]; then
   if [ "$2" = '/' ]; then printf '%s\n' '\\wsl.localhost\TestDistro\'; exit 0; fi
   if [ "$2" = "$TEST_SOURCE" ]; then printf '%s\n' "$TEST_SOURCE_NATIVE"; exit 0; fi
   if [ "$2" = "$TEST_PARENT" ]; then printf '%s\n' "$TEST_PARENT_NATIVE"; exit 0; fi
+  case "$2" in "$XDG_CACHE_HOME"*) printf '%s\n' '\\wsl.localhost\TestDistro\cache'; exit 0;; esac
 elif [ "$1" = '-u' ]; then
   printf '%s\n' "$TEST_PARENT"; exit 0
 fi

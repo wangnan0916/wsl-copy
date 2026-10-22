@@ -16,6 +16,7 @@ func testWindowsRetirementLifetime(t *testing.T, env windowsEnvironment) {
 	f := newWindowsFixture(t, env)
 	must(t, os.Mkdir(f.target, 0700))
 	writeFile(t, filepath.Join(f.target, "old-only"), "previous")
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	binary := filepath.Join(t.TempDir(), "wsl-copy")
 	build := exec.CommandContext(t.Context(), "go", "build", "-o", binary, "../cmd/wsl-copy")
 	if output, err := build.CombinedOutput(); err != nil {
@@ -48,6 +49,9 @@ esac
 		t.Fatalf("CLI waited for retirement or failed: %v; %s", err, output)
 	}
 	cancel()
+	lock, err := acquireCopyLock(filepath.Join(os.Getenv("XDG_CACHE_HOME"), "wsl-copy", "copy.lock"))
+	must(t, err) // Native retirement is still blocked, but must not hold the copy lock.
+	must(t, lock.Close())
 	var result map[string]any
 	must(t, json.Unmarshal(output, &result))
 	if result["status"] != "copied" || result["cleanup_error"] != nil || result["previous_windows_path"] != nil {

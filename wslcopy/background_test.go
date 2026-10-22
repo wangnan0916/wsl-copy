@@ -79,6 +79,7 @@ func TestBackgroundRetirement(t *testing.T) {
 	t.Setenv("TEST_CLEANUP_READY", readyPath)
 	opts := f.options()
 	opts.Replace = true
+	opts.LockFile = filepath.Join(os.Getenv("XDG_CACHE_HOME"), "copy.lock")
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	type outcome struct {

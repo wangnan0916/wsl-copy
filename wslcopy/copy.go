@@ -10,8 +10,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 )
+
+// ErrBusy means another cooperating copy holds the same lock. No target was changed.
+var ErrBusy = errors.New("another copy is running; retry after it finishes")
 
 // Options configures copying. Existing destinations are refused unless Replace is enabled.
 type Options struct {
@@ -24,6 +28,9 @@ type Options struct {
 	SourceRoot, WindowsRoot string
 	// Replace permits retiring an existing ordinary directory before copying.
 	Replace bool
+	// LockFile serializes cooperating copies through one persistent WSL lock file.
+	// Empty leaves coordination to the caller. DryRun never acquires/creates it.
+	LockFile string
 	// WSL executable paths; empty values resolve tar.exe and powershell.exe through PATH.
 	WindowsTar, PowerShell string
 	// DryRun validates without creating a destination or running tar.
@@ -88,6 +95,39 @@ func Copy(ctx context.Context, opts Options) (Result, error) {
 	volume := uncVolume(wslRoot)
 	if volume == "" || !strings.EqualFold(uncVolume(sourceNative), volume) {
 		return output, errors.New("source must be on the WSL filesystem, not a Windows drive or network share")
+	}
+	if opts.LockFile != "" {
+		if !filepath.IsAbs(opts.LockFile) || slices.Contains(strings.Split(opts.LockFile, "/"), "..") || within(source, opts.LockFile) {
+			return output, errors.New("lock_file must be an absolute WSL path outside the source, without .. components")
+		}
+		lockParent := filepath.Dir(opts.LockFile)
+		if err := checkDirectory(lockParent, true); err != nil {
+			return output, err
+		}
+		native, err := r.convertPath(lockParent, "-w")
+		if err != nil {
+			return output, err
+		}
+		if !strings.EqualFold(uncVolume(native), volume) {
+			return output, errors.New("lock_file must be on the WSL filesystem, not a Windows drive")
+		}
+		if info, err := os.Lstat(opts.LockFile); err == nil {
+			if !info.Mode().IsRegular() {
+				return output, errors.New("copy lock must be a regular file")
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return output, err
+		}
+		if !opts.DryRun {
+			if err := ctx.Err(); err != nil {
+				return output, err
+			}
+			lock, err := acquireCopyLock(filepath.Clean(opts.LockFile))
+			if err != nil {
+				return output, err
+			}
+			defer lock.Close()
+		}
 	}
 	if err := r.checkDestination(target, powershell, opts.Replace, mappingRoot); err != nil {
 		return output, err

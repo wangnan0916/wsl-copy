@@ -13,6 +13,7 @@ type configuration struct {
 	SourceRoot  string `json:"source_root"`
 	WindowsRoot string `json:"windows_root"`
 	Replace     bool   `json:"replace"`
+	LockFile    string `json:"lock_file"`
 	WindowsTar  string `json:"windows_tar"`
 	PowerShell  string `json:"powershell"`
 }

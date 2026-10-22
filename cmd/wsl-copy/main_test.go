@@ -22,21 +22,21 @@ func TestMappingOptions(t *testing.T) {
 	t.Setenv("WSL_COPY_WINDOWS_TAR", "")
 	t.Setenv("WSL_COPY_POWERSHELL", "")
 	must(t, os.Mkdir(filepath.Join(dir, "wsl-copy"), 0700))
-	must(t, os.WriteFile(filepath.Join(dir, "wsl-copy", "config.json"), []byte(`{"source_root":"/source","windows_root":"Q:\\mirror","replace":true,"windows_tar":"/configured/tar.exe"}`), 0600))
+	must(t, os.WriteFile(filepath.Join(dir, "wsl-copy", "config.json"), []byte(`{"source_root":"/source","windows_root":"Q:\\mirror","replace":true,"lock_file":"/state/config.lock","windows_tar":"/configured/tar.exe"}`), 0600))
 	opts, err := parseOptions([]string{"/source/project"}, io.Discard)
 	must(t, err)
-	if opts.SourceRoot != "/source" || opts.WindowsRoot != `Q:\mirror` || !opts.Replace || opts.WindowsTar != "/configured/tar.exe" {
+	if opts.SourceRoot != "/source" || opts.WindowsRoot != `Q:\mirror` || !opts.Replace || opts.WindowsTar != "/configured/tar.exe" || opts.LockFile != "/state/config.lock" {
 		t.Fatal("configuration not applied:", opts)
 	}
 	t.Setenv("WSL_COPY_WINDOWS_TAR", "/environment/tar.exe")
-	opts, err = parseOptions([]string{"/source/project", `R:\explicit`, "--replace=false", "--source-root", "/override"}, io.Discard)
+	opts, err = parseOptions([]string{"/source/project", `R:\explicit`, "--replace=false", "--source-root", "/override", "--lock-file", "/state/override.lock"}, io.Discard)
 	must(t, err)
-	if opts.Replace || opts.WindowsTarget != `R:\explicit` || opts.SourceRoot != "/override" || opts.WindowsTar != "/environment/tar.exe" {
+	if opts.Replace || opts.WindowsTarget != `R:\explicit` || opts.SourceRoot != "/override" || opts.WindowsTar != "/environment/tar.exe" || opts.LockFile != "/state/override.lock" {
 		t.Fatal("explicit options or environment precedence lost:", opts)
 	}
-	opts, err = parseOptions([]string{"/source/project", `R:\explicit`, "--config=", "--windows-tar", "/flag/tar.exe"}, io.Discard)
+	opts, err = parseOptions([]string{"/source/project", `R:\explicit`, "--config=", "--windows-tar", "/flag/tar.exe", "--lock-file="}, io.Discard)
 	must(t, err)
-	if opts.Replace || opts.SourceRoot != "" || opts.WindowsTar != "/flag/tar.exe" {
+	if opts.Replace || opts.SourceRoot != "" || opts.WindowsTar != "/flag/tar.exe" || opts.LockFile != "" {
 		t.Fatal("configuration not disabled or flag ignored:", opts)
 	}
 	if _, err := parseOptions([]string{"/source/project", "--config="}, io.Discard); err == nil {
@@ -46,6 +46,8 @@ func TestMappingOptions(t *testing.T) {
 
 func TestOptions(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cache := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cache)
 	t.Setenv("WSL_COPY_WINDOWS_TAR", "/env/tar.exe")
 	t.Setenv("WSL_COPY_POWERSHELL", "/env/powershell.exe")
 	for _, args := range [][]string{
@@ -56,7 +58,7 @@ func TestOptions(t *testing.T) {
 	} {
 		opts, err := parseOptions(args, io.Discard)
 		must(t, err)
-		want := options{Source: "/source", WindowsTarget: `Q:\destination`, WindowsTar: "/explicit/tar.exe", PowerShell: "/env/powershell.exe", DryRun: true}
+		want := options{Source: "/source", WindowsTarget: `Q:\destination`, WindowsTar: "/explicit/tar.exe", PowerShell: "/env/powershell.exe", DryRun: true, LockFile: filepath.Join(cache, "wsl-copy", "copy.lock")}
 		if opts != want {
 			t.Fatalf("incorrect options for %q: %+v", args, opts)
 		}

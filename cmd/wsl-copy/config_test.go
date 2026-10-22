@@ -11,11 +11,12 @@ func TestLoadConfig(t *testing.T) {
 		"source_root": "/home/example",
 		"windows_root": "D:\\Copies",
 		"replace": true,
+		"lock_file": "/state/shared.lock",
 		"windows_tar": "/tools/tar.exe",
 		"powershell": "/tools/powershell.exe"
 	}`
 	want := configuration{
-		SourceRoot: "/home/example", WindowsRoot: `D:\Copies`, Replace: true,
+		SourceRoot: "/home/example", WindowsRoot: `D:\Copies`, Replace: true, LockFile: "/state/shared.lock",
 		WindowsTar: "/tools/tar.exe", PowerShell: "/tools/powershell.exe",
 	}
 	for _, tt := range []struct {

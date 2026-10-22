@@ -23,7 +23,7 @@ The [installer](install.sh) detects x86-64 or ARM64, downloads the newest public
 To pin a version or bypass GitHub API rate limits when discovering releases:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wangnan0916/wsl-copy/main/install.sh | sh -s -- v0.1.0
+curl -fsSL https://raw.githubusercontent.com/wangnan0916/wsl-copy/main/install.sh | sh -s -- v0.2.0
 ```
 
 Rerun the installer to upgrade; it replaces the installed executable and license notices only after download, checksum and binary-version checks pass. There is no background updater. The installer does not modify shell configuration, install dependencies or guess Windows tool locations. It prints PATH instructions and warns about missing runtime tools; see [Windows tool paths](#windows-tool-paths). Add the PATH command below to your shell startup file if needed. You can read or download `install.sh` before running it instead of piping remote code into a shell.
@@ -35,7 +35,7 @@ export PATH="$HOME/.local/bin:$PATH"
 wsl-copy "$HOME/project/dist" 'D:\Copies\my-build'
 ```
 
-| WSL architecture | Archive | v0.1.0 validation |
+| WSL architecture | Archive | Validation |
 | --- | --- | --- |
 | x86-64 (`uname -m`: `x86_64`) | `wsl-copy-linux-amd64.tar.gz` | Tested with native Windows tools |
 | ARM64 (`uname -m`: `aarch64`) | `wsl-copy-linux-arm64.tar.gz` | Cross-built only; not tested on ARM64 hardware |
@@ -44,7 +44,7 @@ For manual installation, download the matching archive and `SHA256SUMS` from [Re
 
 ### Target mapping and replacement
 
-**Development version:** these options are not in the published `v0.1.0` binary. Build from source until the next release.
+Mapping, replacement, background retirement and CLI copy locking are available in `v0.2.0` and newer. The original `v0.1.0` remains create-only.
 
 An explicit target takes precedence over mapping. Use `--replace` to replace an existing ordinary directory:
 
@@ -67,6 +67,14 @@ With that configuration, `wsl-copy /home/you/project/dist` maps to `D:\Copies\pr
 You can also pass `--source-root` and `--windows-root` directly. `--config FILE` selects a configuration file; `--config ''` disables configuration. Flags override configuration, including `--replace=false`. Optional `windows_tar` and `powershell` config fields specify WSL executable paths; tool resolution is flag → environment → config → PATH. Unknown config fields and invalid JSON are rejected. Help and version commands do not read configuration. No configuration file is created automatically.
 
 Replacement is a full directory replacement, not a merge. Windows-only files and IDE settings in the old target are not preserved in the new target. The original path is **not usable during copying**; consumers must wait for the result. A new, previously absent target works with or without `--replace`.
+
+### Copy coordination
+
+The CLI uses one nonblocking exclusive lock for all real copies by the same WSL user: `os.UserCacheDir()/wsl-copy/copy.lock` (normally `$HOME/.cache/wsl-copy/copy.lock`). This deliberately serializes even unrelated targets, avoiding same-target and parent/child overlap without path-based lock aliases. A busy call fails immediately with exit 1 and `status: "failed"`; there is no wait queue or automatic retry.
+
+Use `--lock-file /absolute/wsl/path` or configuration `"lock_file": "/absolute/wsl/path"` to share an existing lock with other callers. The path must be outside the source, on the WSL filesystem, with no symlink ancestry; missing parents are created only for real copies. Never delete, replace or relocate a lock file while callers may use it. Explicit `--lock-file ''` disables coordination only when the caller already provides it. Different lock files/users/distributions and external tools are not coordinated.
+
+The lock covers destination preflight, copying, rollback and retirement handoff. It is released on return or process exit, and is not inherited by tar or the detached retirement process. Cleanup therefore never delays admission of the next copy. Dry-run validates without acquiring or creating a lock. This does not lock source producers, Windows applications or retired-tree ancestors; keep builds finished and discarded containers untouched.
 
 ### Build from source
 
@@ -93,7 +101,7 @@ Replace the example paths with your own. The source must be an existing absolute
 
 Single files, Windows-mounted sources, UNC/device destinations, drive roots, `..` components, symbolic-link paths and junction ancestors are not supported.
 
-`--dry-run` validates paths and source entries, plus the old tree when replacing, without creating, renaming or deleting directories or running tar. It does not prove extraction compatibility or guarantee that later rename/cleanup operations will succeed. Options may appear before, between or after positional arguments; `--` ends option parsing. Long options use GNU syntax (`--dry-run`, not `-dry-run`). Use `--help` or `-h` for help.
+`--dry-run` validates paths, source entries and lock configuration, but does not scan old descendants or acquire the copy lock, without creating, renaming or deleting directories or running tar. It does not prove extraction compatibility or guarantee that later rename/cleanup operations will succeed. Options may appear before, between or after positional arguments; `--` ends option parsing. Long options use GNU syntax (`--dry-run`, not `-dry-run`). Use `--help` or `-h` for help.
 
 ### Windows tool paths
 
@@ -112,7 +120,7 @@ Resolution order: explicit options, then `WSL_COPY_WINDOWS_TAR` / `WSL_COPY_POWE
 The public package `github.com/wangnan0916/wsl-copy/wslcopy` (package name `wslcopy`) exposes the copy operation independently of the CLI:
 
 ```bash
-go get github.com/wangnan0916/wsl-copy/wslcopy@v0.1.0
+go get github.com/wangnan0916/wsl-copy/wslcopy@v0.2.0
 ```
 
 ```go
@@ -128,7 +136,7 @@ result, err := wslcopy.Copy(ctx, wslcopy.Options{
 })
 ```
 
-`Options.SourceRoot` / `Options.WindowsRoot` enable mapping when `WindowsTarget` is empty; `Options.Replace` opts into replacement. `Options.DryRun` validates without mutation or tar execution. The library does not load configuration files.
+`Options.SourceRoot` / `Options.WindowsRoot` enable mapping when `WindowsTarget` is empty; `Options.Replace` opts into replacement. `Options.DryRun` validates without mutation or tar execution. The library does not load configuration files. Set `Options.LockFile` to one shared absolute WSL file to serialize cooperating library calls; empty leaves coordination to the caller. Lock contention returns an error wrapping `wslcopy.ErrBusy` without changing the target.
 
 Inspect `Result` on both success and failure. `DestinationCreated` is historical ownership: it stays true even when failed new output is moved aside and the previous directory is restored. `RetainedWindowsPath` locates that failed output; `DestinationRestored` reports successful rollback. `PreviousWindowsPath` is the last-known old-data location on copy or retirement-launch failure. A successful launch clears that field; it does **not** mean deletion has completed. `CleanupError` reports only failure to prepare/start retirement, without rolling back the completed copy. Later worker failures stay in its `cleanup.log`, not in the already-returned result. Empty recovery fields are omitted by the CLI.
 
@@ -146,6 +154,7 @@ Inspect `Result` on both success and failure. `DestinationCreated` is historical
 │   ├── copy.go, copy_test.go       # Public API and copy orchestration
 │   ├── paths.go, paths_test.go     # Path, filename and source-tree validation
 │   ├── mapping.go, mapping_test.go # Source-relative destination mapping
+│   ├── lock_linux.go, lock_test.go # Shared nonblocking copy lock and process-exit tests
 │   ├── replace.go, replace_test.go # Retirement ownership, launch and rollback
 │   ├── background_linux.go        # Detached child lifetime and process reaping
 │   ├── background_other.go        # Non-Linux build compatibility
@@ -175,7 +184,7 @@ The PowerShell scripts are embedded at build time, not loaded from the working d
 - The temporary archive is removed on normal exit or error. Failed new output is **never deleted**. Without a previous directory it stays at the target. During replacement, an ordinary copy failure moves new output aside and attempts to restore the previous directory without overwriting another entry. A failed rollback retains both trees for recovery.
 - Replacement reserves a unique sibling `.wsl-copy-<id>` directory and renames the old target into its `previous` child **before packing/copying**. After successful extraction, one detached native PowerShell process revalidates the entire owned retired tree, then deletes entries bottom-up without following reparse points or using recursive directory deletion. **Copy/CLI return after launching it, without waiting for checks or deletion.** The worker has independent lifetime, null stdio and no dependency on the caller's context, terminal or output pipes; it continues after normal CLI exit. Only this invocation's retired tree can be removed; failed `partial` output is retained. No queue, persistent service or automatic retry is involved.
 - Cancellation during copying conservatively retains the old and new trees in their last-known locations, rather than restoring old data into a path that a Windows writer may still be using. There is no automatic crash recovery or retry. Inspect reported recovery paths before a later replacement attempt.
-- Finish builds and writes first. Keep the source and destination parent stable until return. After handoff, never modify, adopt or reuse a retirement container or replace its ancestors; these are discarded paths, not current build outputs. Copying is not an atomic publication; consumers wait for `copied`, then use `windows_path` immediately without polling retirement. These checks do not defend against concurrent junction swaps, overlapping parent/child copies or external writes. Newly created mapping parents can remain after a failure.
+- Finish builds and writes first. Keep the source and destination parent stable until return. After handoff, never modify, adopt or reuse a retirement container or replace its ancestors; these are discarded paths, not current build outputs. Copying is not an atomic publication; consumers wait for `copied`, then use `windows_path` immediately without polling retirement. The shared copy lock prevents cooperating foreground copies from overlapping; it does not defend against external writes, concurrent junction swaps or callers using different/no locks. Newly created mapping parents can remain after a failure.
 
 A successful worker deletes its container and `cleanup.log`. On failure it retains the remaining old data and a best-effort error log at `.wsl-copy-<id>/cleanup.log`; the old tree may be partly deleted and must not be restored automatically. Failed startup, forced termination or WSL shutdown may leave a queued/running log or no final diagnostic. This is operator evidence for troubleshooting, not a completion API; normal callers must not wait or poll it.
 
@@ -279,8 +288,8 @@ Only **pushing a new version tag** publishes a GitHub Release. Branch/PR runs an
 After reviewing the commit and running native Windows tests locally, release a new version:
 
 ```bash
-git tag -a v0.1.1 -m "Release v0.1.1"
-git push origin v0.1.1
+git tag -a v0.2.1 -m "Release v0.2.1"
+git push origin v0.2.1
 ```
 
 Tags must use `vMAJOR.MINOR.PATCH` or `vMAJOR.MINOR.PATCH-PRERELEASE`. Tags starting with `v0.` and tags with a prerelease suffix are marked as GitHub prereleases. The workflow uploads the two archives and checksum file to a draft before publishing it. It never overwrites an existing release or its assets; if an upload fails, inspect the draft before any manual recovery. Do not move published tags or replace published assets.
@@ -290,7 +299,7 @@ Hosted Linux CI cannot replace WSL/Windows-native tests; ARM64 remains cross-bui
 ### Local release builds
 
 ```bash
-make release VERSION=v0.1.0
+make release VERSION=v0.2.0
 ```
 
 This builds `dist/wsl-copy-linux-amd64` and `dist/wsl-copy-linux-arm64` with CGO disabled, then packages each as `dist/wsl-copy-linux-<arch>.tar.gz` with `LICENSE` and `THIRD_PARTY_NOTICES`. `dist/SHA256SUMS` covers the two release archives. It does not install commands or publish anything.
