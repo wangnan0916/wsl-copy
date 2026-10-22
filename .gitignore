@@ -1,0 +1,4 @@
+/dist/
+/wsl-copy
+*.test
+/coverage.out
