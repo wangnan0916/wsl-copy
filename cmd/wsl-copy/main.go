@@ -53,7 +53,7 @@ func parseOptions(args []string, output io.Writer) (options, error) {
 	fs.StringVar(&opts.WindowsTar, "windows-tar", os.Getenv("WSL_COPY_WINDOWS_TAR"), "WSL executable path (default: WSL_COPY_WINDOWS_TAR or tar.exe on PATH)")
 	fs.StringVar(&opts.PowerShell, "powershell", os.Getenv("WSL_COPY_POWERSHELL"), "WSL executable path (default: WSL_COPY_POWERSHELL or powershell.exe on PATH)")
 	fs.Usage = func() {
-		fmt.Fprintln(output, "Usage: wsl-copy SOURCE [WINDOWS_TARGET] [options]\n\nCopy a WSL directory to Windows. Specify a target or configure source-relative mapping.\nExisting targets are refused unless --replace or configuration enables replacement.")
+		fmt.Fprintln(output, "Usage: wsl-copy SOURCE [WINDOWS_TARGET] [options]\n\nCopy a WSL directory to Windows. Specify a target or configure source-relative mapping.\nExisting targets are refused unless --replace or configuration enables replacement.\n\nCommands:\n  update [VERSION]  Upgrade the user-local installation; see update --help.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -100,6 +100,9 @@ func parseOptions(args []string, output io.Writer) (options, error) {
 }
 
 func runCLI(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "update" {
+		return runUpdate(args[1:], stdout, stderr)
+	}
 	opts, err := parseOptions(args, stdout)
 	if errors.Is(err, flag.ErrHelp) {
 		return 0

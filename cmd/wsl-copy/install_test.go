@@ -1,8 +1,13 @@
+//go:build linux
+
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,8 +42,12 @@ func TestInstaller(t *testing.T) {
 	must(t, os.WriteFile(filepath.Join(release, "SHA256SUMS"), []byte(sums.String()), 0o600))
 	for _, tc := range []struct {
 		name, arch, version, fault, wantError string
+		update                                bool
 	}{
 		{name: "latest", arch: "x86_64"},
+		{name: "update-latest", arch: "x86_64", update: true},
+		{name: "update-pinned", arch: "x86_64", version: "v0.1.0", update: true},
+		{name: "update-checksum", arch: "x86_64", fault: "checksum", wantError: "Checksum verification failed", update: true},
 		{name: "explicit", arch: "x86_64", version: "v0.1.0"},
 		{name: "arm64-selection", arch: "aarch64"},
 		{name: "checksum", arch: "x86_64", fault: "checksum", wantError: "Checksum verification failed"},
@@ -57,6 +66,9 @@ func TestInstaller(t *testing.T) {
 			}
 			target := filepath.Join(home, ".local/bin/wsl-copy")
 			must(t, os.WriteFile(target, []byte("previous installation"), 0o700))
+			config := filepath.Join(home, ".config", "wsl-copy", "config.json")
+			must(t, os.MkdirAll(filepath.Dir(config), 0700))
+			must(t, os.WriteFile(config, []byte("keep user configuration"), 0600))
 			must(t, os.WriteFile(filepath.Join(bin, "uname"), []byte("#!/bin/sh\ncase $1 in -s) echo Linux;; -m) echo \"$TEST_ARCH\";; esac\n"), 0o700))
 			must(t, os.WriteFile(filepath.Join(bin, "curl"), []byte(`#!/bin/sh
 set -eu
@@ -116,7 +128,29 @@ exec "$TEST_REAL_INSTALL" "$@"
 				input = input[:strings.LastIndex(input, "\n}")]
 			}
 			cmd.Stdin = strings.NewReader(input)
-			out, err := cmd.CombinedOutput()
+			var out []byte
+			if tc.update {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.Method == http.MethodGet {
+						fmt.Fprint(w, input)
+					}
+				}))
+				defer server.Close()
+				var versions []string
+				if tc.version != "" {
+					versions = []string{tc.version}
+				}
+				var output bytes.Buffer
+				err = updateInstallation(t.Context(), server.URL, versions, &output, &output)
+				out = output.Bytes()
+			} else {
+				out, err = cmd.CombinedOutput()
+			}
+			configData, configErr := os.ReadFile(config)
+			must(t, configErr)
+			if string(configData) != "keep user configuration" {
+				t.Fatal("configuration changed during installation/update")
+			}
 			if tc.wantError != "" {
 				if err == nil || !strings.Contains(strings.ToLower(string(out)), strings.ToLower(tc.wantError)) {
 					t.Fatalf("expected %q: %v: %s", tc.wantError, err, out)

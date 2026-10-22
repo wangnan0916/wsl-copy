@@ -26,7 +26,7 @@ To pin a version or bypass GitHub API rate limits when discovering releases:
 curl -fsSL https://raw.githubusercontent.com/wangnan0916/wsl-copy/main/install.sh | sh -s -- v0.2.0
 ```
 
-Rerun the installer to upgrade; it replaces the installed executable and license notices only after download, checksum and binary-version checks pass. There is no background updater. The installer does not modify shell configuration, install dependencies or guess Windows tool locations. It prints PATH instructions and warns about missing runtime tools; see [Windows tool paths](#windows-tool-paths). Add the PATH command below to your shell startup file if needed. You can read or download `install.sh` before running it instead of piping remote code into a shell.
+Rerun the installer to upgrade an older release. The development CLI also provides `wsl-copy update` (see below). The installer replaces the executable and license notices only after download, checksum and binary-version checks pass. There is no background updater. The installer does not modify shell configuration, install dependencies or guess Windows tool locations. It prints PATH instructions and warns about missing runtime tools; see [Windows tool paths](#windows-tool-paths). Add the PATH command below to your shell startup file if needed. You can read or download `install.sh` before running it instead of piping remote code into a shell.
 
 Then copy an existing WSL directory to a **new** Windows directory:
 
@@ -41,6 +41,20 @@ wsl-copy "$HOME/project/dist" 'D:\Copies\my-build'
 | ARM64 (`uname -m`: `aarch64`) | `wsl-copy-linux-arm64.tar.gz` | Cross-built only; not tested on ARM64 hardware |
 
 For manual installation, download the matching archive and `SHA256SUMS` from [Releases](https://github.com/wangnan0916/wsl-copy/releases). Each archive contains `wsl-copy`, `LICENSE` and `THIRD_PARTY_NOTICES`. These are Linux binaries, not Windows `.exe` files. See [Windows tool paths](#windows-tool-paths) if dependencies are not on your PATH, and [known Windows tar limitations](#known-windows-tar-limitations) before copying affected names or paths.
+
+### Update command
+
+**Development version:** `v0.2.0` does not yet contain this command. Build from source, or bootstrap once with the one-command installer after a release containing it is published.
+
+```bash
+wsl-copy update           # Newest public release, including prereleases
+wsl-copy update v0.2.0    # Install a specific published version (including downgrade)
+wsl-copy update --help
+```
+
+This is an explicit, foreground update, not a background updater. It downloads the official `main/install.sh` over HTTPS, completely and with a 64 KiB limit before execution. Installer redirects are refused, HTTP operations are bounded, and the update has a five-minute overall timeout. The existing installer performs release checksum/version checks and staged executable replacement; dependencies are not installed automatically.
+
+Updates always install to `$HOME/.local/bin/wsl-copy`, with notices under `$HOME/.local/share/wsl-copy`. They do not modify user configuration, copy targets, shell startup files or a custom binary at another location. Update bypasses copy configuration and Windows-tool preflight, and prints installer progress as text rather than copy JSON. Argument errors exit 2; download/install errors exit 1. Cancellation signals the installer and its child processes so cleanup traps can run; cancellation after executable replacement cannot undo that committed update.
 
 ### Target mapping and replacement
 
@@ -149,6 +163,7 @@ Inspect `Result` on both success and failure. `DestinationCreated` is historical
 │   ├── main.go                    # Arguments, signals and CLI output
 │   ├── main_test.go               # Argument, help and version tests
 │   ├── config.go, config_test.go   # Optional user configuration
+│   ├── update_linux.go, update_test.go # Bounded installer download and explicit updates
 │   └── install_test.go            # Installer checks with isolated downloads
 ├── wslcopy/
 │   ├── copy.go, copy_test.go       # Public API and copy orchestration
@@ -205,7 +220,7 @@ The result contains `status` and `elapsed_seconds`, plus `source_path` and `wind
 
 If retirement cannot be prepared/started, `cleanup_error` accompanies `status: "copied"` and exit 0: the new target is usable and old data is retained. Never roll back from that warning. Once the worker is launched, later cleanup failures cannot change stdout, stderr, the exit code or the returned `Result`; they are recorded in its private log when possible. Successful handoff and create-only calls both keep the normal copy JSON field set.
 
-`copied` means successful packing and extraction, **not content or filename round-trip verification** and not a guarantee that old-tree retirement succeeded. `--help` and `--version` print text instead of JSON. Forced termination can leave a partial destination and may not produce JSON; there is no crash recovery.
+`copied` means successful packing and extraction, **not content or filename round-trip verification** and not a guarantee that old-tree retirement succeeded. `--help`, `--version` and `update` print text instead of JSON. Forced termination can leave a partial destination and may not produce JSON; there is no crash recovery.
 
 ## Known Windows tar limitations
 
