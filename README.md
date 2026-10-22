@@ -10,28 +10,49 @@ Use it to copy build artifacts, front-end bundles or WeChat mini-program output 
 
 ## Quick start: copy a WSL folder to Windows
 
-### Download a release
+### Install in WSL (no Go required)
 
-Download [v0.1.0](https://github.com/wangnan0916/wsl-copy/releases/tag/v0.1.0), the initial preview release, inside WSL:
+[v0.1.0](https://github.com/wangnan0916/wsl-copy/releases/tag/v0.1.0) is the initial preview release. Run the following in a **WSL terminal**, not Windows PowerShell. It selects the architecture, verifies SHA-256 checksums and installs for the current user without `sudo`:
 
-| WSL architecture | Archive | Validation |
+```bash
+(
+  set -eu
+  version=v0.1.0
+  case "$(uname -m)" in
+    x86_64) arch=amd64 ;;
+    aarch64|arm64) arch=arm64 ;;
+    *) echo "Unsupported architecture" >&2; exit 1 ;;
+  esac
+  work="$(mktemp -d)"
+  trap 'rm -rf "$work"' EXIT
+  cd "$work"
+  base="https://github.com/wangnan0916/wsl-copy/releases/download/$version"
+  curl -fLO "$base/wsl-copy-linux-$arch.tar.gz"
+  curl -fLO "$base/SHA256SUMS"
+  sha256sum --ignore-missing -c SHA256SUMS
+  tar -xzf "wsl-copy-linux-$arch.tar.gz"
+  install -Dm755 wsl-copy "$HOME/.local/bin/wsl-copy"
+  install -Dm644 LICENSE "$HOME/.local/share/wsl-copy/LICENSE"
+  install -Dm644 THIRD_PARTY_NOTICES "$HOME/.local/share/wsl-copy/THIRD_PARTY_NOTICES"
+  "$HOME/.local/bin/wsl-copy" --version
+)
+```
+
+The executable is installed at `~/.local/bin/wsl-copy`; license notices are kept in `~/.local/share/wsl-copy/`. The PATH command below applies to the current shell; add it to your shell startup file if `~/.local/bin` is not already on your PATH. To upgrade, change `version` to the desired published tag and rerun the installation block; it replaces the installed executable and license notices. There is no automatic updater.
+
+Then copy an existing WSL directory to a **new** Windows directory:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+wsl-copy "$HOME/project/dist" 'D:\Copies\my-build'
+```
+
+| WSL architecture | Archive | v0.1.0 validation |
 | --- | --- | --- |
 | x86-64 (`uname -m`: `x86_64`) | `wsl-copy-linux-amd64.tar.gz` | Tested with native Windows tools |
 | ARM64 (`uname -m`: `aarch64`) | `wsl-copy-linux-arm64.tar.gz` | Cross-built only; not tested on ARM64 hardware |
 
-For x86-64, download the archive and checksum file into an empty working directory:
-
-```bash
-curl -fLO https://github.com/wangnan0916/wsl-copy/releases/download/v0.1.0/wsl-copy-linux-amd64.tar.gz
-curl -fLO https://github.com/wangnan0916/wsl-copy/releases/download/v0.1.0/SHA256SUMS
-sha256sum --ignore-missing -c SHA256SUMS
-mkdir wsl-copy-v0.1.0
-tar -xzf wsl-copy-linux-amd64.tar.gz -C wsl-copy-v0.1.0
-./wsl-copy-v0.1.0/wsl-copy --version
-./wsl-copy-v0.1.0/wsl-copy "$HOME/project/dist" 'D:\Copies\my-build'
-```
-
-For ARM64, use the ARM64 archive instead. Each archive contains the Linux executable `wsl-copy`, `LICENSE` and `THIRD_PARTY_NOTICES`. These are not Windows `.exe` files. See [known Windows tar limitations](#known-windows-tar-limitations) before copying names or paths affected by the current Windows tar implementation.
+For manual installation, download the matching archive and `SHA256SUMS` from [Releases](https://github.com/wangnan0916/wsl-copy/releases). Each archive contains `wsl-copy`, `LICENSE` and `THIRD_PARTY_NOTICES`. These are Linux binaries, not Windows `.exe` files. See [Windows tool paths](#windows-tool-paths) if dependencies are not on your PATH, and [known Windows tar limitations](#known-windows-tar-limitations) before copying affected names or paths.
 
 ### Build from source
 
@@ -99,6 +120,7 @@ result, err := wslcopy.Copy(ctx, wslcopy.Options{
 
 ```text
 .
+├── .github/workflows/release.yml  # CI builds and tag-triggered releases
 ├── cmd/wsl-copy/
 │   ├── main.go                    # Arguments, signals and CLI output
 │   └── main_test.go               # Argument, help and version tests
@@ -214,7 +236,24 @@ Native tests use only randomly named fixtures in the current Windows user's temp
 
 Keep copying and safety policy in the public `wslcopy/` package, with tests beside the code they exercise. Keep argument parsing, environment defaults, signals, timing, JSON and exit codes in `cmd/wsl-copy`. Use pflag for CLI argument parsing and muonsoft/validation for filename checks, and prefer the standard library and system tools elsewhere. Keep archive transfer separate from destination policy; do not add deletion permissions, parallel extraction, archive splitting, services or workflow frameworks. New copy modes require an explicit safety contract. Write documentation, help and comments in English; multilingual test filenames are intentional. Development automation must not install dependencies or commands, change global configuration, or publish releases without explicit approval.
 
-## Release builds
+## Automated builds and releases
+
+[Build and release workflow](https://github.com/wangnan0916/wsl-copy/actions/workflows/release.yml) runs on `main` pushes, pull requests and manual dispatches. It installs the Go version from `go.mod`, checks formatting, runs Linux tests with the race detector, vets code, verifies dependencies, checks modernization, and packages Linux amd64/arm64 archives with SHA256SUMS. CI artifacts are retained for seven days.
+
+Only **pushing a new version tag** publishes a GitHub Release. Branch/PR runs and manual dispatches build but do not publish. Actions are pinned to commit SHAs; the build job is read-only, and only the tag-gated publish job has release-write permission through the built-in `GITHUB_TOKEN`. No personal access token is needed.
+
+After reviewing the commit and running native Windows tests locally, release a new version:
+
+```bash
+git tag -a v0.1.1 -m "Release v0.1.1"
+git push origin v0.1.1
+```
+
+Tags must use `vMAJOR.MINOR.PATCH` or `vMAJOR.MINOR.PATCH-PRERELEASE`. Tags starting with `v0.` and tags with a prerelease suffix are marked as GitHub prereleases. The workflow uploads the two archives and checksum file to a draft before publishing it. It never overwrites an existing release or its assets; if an upload fails, inspect the draft before any manual recovery. Do not move published tags or replace published assets.
+
+Hosted Linux CI cannot replace WSL/Windows-native tests; ARM64 remains cross-build-only. The existing `v0.1.0` release was built locally. Automation applies to new tags containing the workflow; it does not rebuild or change that release.
+
+### Local release builds
 
 ```bash
 make release VERSION=v0.1.0

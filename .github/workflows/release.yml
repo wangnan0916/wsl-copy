@@ -1,0 +1,112 @@
+name: Build and release
+
+"on":
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GOTOOLCHAIN: local
+  WSL_COPY_WINDOWS_TESTS: '0'
+  VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Validate version
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == tag ]] && ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "Expected vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-PRERELEASE" >&2
+            exit 1
+          fi
+      - name: Test and check
+        run: |
+          test -z "$(gofmt -l cmd wslcopy)"
+          go test -race -count=1 ./...
+          go vet ./...
+          go mod verify
+          go fix -diff ./...
+      - name: Build and verify release packages
+        run: |
+          test -z "$(git status --porcelain)"
+          make release VERSION="$VERSION"
+          (cd dist && sha256sum -c SHA256SUMS)
+          test "$(dist/wsl-copy-linux-amd64 --version)" = "wsl-copy $VERSION"
+          dist/wsl-copy-linux-amd64 --help
+          for arch in amd64 arm64; do
+            test "$(tar -tzf "dist/wsl-copy-linux-$arch.tar.gz")" = "$(printf 'wsl-copy\nLICENSE\nTHIRD_PARTY_NOTICES')"
+          done
+          git diff --exit-code
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: upload
+        with:
+          name: release-files-${{ github.run_attempt }}
+          path: |
+            dist/wsl-copy-linux-amd64.tar.gz
+            dist/wsl-copy-linux-arm64.tar.gz
+            dist/SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: dist
+      - name: Verify and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cd dist
+          sha256sum -c SHA256SUMS
+          flags=()
+          if [[ "$VERSION" == v0.* || "$VERSION" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+          # Never overwrite an existing release or replace its assets on a rerun.
+          gh release create "$VERSION" \
+            wsl-copy-linux-amd64.tar.gz wsl-copy-linux-arm64.tar.gz SHA256SUMS \
+            --verify-tag --draft --title "$VERSION" "${flags[@]}" --notes-file - <<'NOTES'
+          Automated build from the version tag using GitHub Actions.
+
+          Includes Linux amd64 and arm64 binaries for WSL, MIT and third-party license notices, and SHA256SUMS.
+
+          Linux tests, race checks, go vet, module verification and packaging checks passed. ARM64 is cross-built only. This hosted Linux workflow does not run WSL/Windows-native tests.
+
+          Windows tar has known emoji, decomposed-Unicode and long-path limitations. See the repository README for requirements, installation and the safety contract. No overwrite, merge or background sync.
+          NOTES
+          gh release edit "$VERSION" --draft=false
